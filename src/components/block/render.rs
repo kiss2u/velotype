@@ -1441,6 +1441,8 @@ impl Block {
             .on_action(cx.listener(Self::on_end))
             .on_action(cx.listener(Self::on_select_left))
             .on_action(cx.listener(Self::on_select_right))
+            .on_action(cx.listener(Self::on_select_home))
+            .on_action(cx.listener(Self::on_select_end))
             .on_action(cx.listener(Self::on_select_all))
             .on_action(cx.listener(Self::on_copy))
             .on_action(cx.listener(Self::on_cut))
@@ -2232,7 +2234,7 @@ impl Render for Block {
                                 )
                                 .on_mouse_up_out(
                                     MouseButton::Left,
-                                    cx.listener(Self::on_code_language_mouse_up),
+                                    cx.listener(Self::on_code_language_mouse_up_out),
                                 )
                                 .on_mouse_move(cx.listener(Self::on_code_language_mouse_move))
                                 .w(px(d.code_language_input_width))

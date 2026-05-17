@@ -12,7 +12,8 @@ use super::{Block, BlockEvent, BlockKind, InlineFormat, InlineTextTree, UndoCapt
 use crate::components::{
     BoldSelection, CodeSelection, Copy, Cut, Delete, DeleteBack, DismissTransientUi, End,
     ExitCodeBlock, FocusNext, FocusPrev, Home, IndentBlock, ItalicSelection, MoveLeft, MoveRight,
-    Newline, OutdentBlock, Paste, SelectAll, SelectLeft, SelectRight, UnderlineSelection,
+    Newline, OutdentBlock, Paste, SelectAll, SelectEnd, SelectHome, SelectLeft, SelectRight,
+    UnderlineSelection,
 };
 
 impl Block {
@@ -596,6 +597,24 @@ impl Block {
         self.select_to(self.visible_len(), cx);
     }
 
+    pub(crate) fn on_select_home(
+        &mut self,
+        _: &SelectHome,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.select_to(0, cx);
+    }
+
+    pub(crate) fn on_select_end(
+        &mut self,
+        _: &SelectEnd,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.select_to(self.visible_len(), cx);
+    }
+
     pub(crate) fn on_copy(&mut self, _: &Copy, _window: &mut Window, cx: &mut Context<Self>) {
         if !self.selected_range.is_empty() {
             cx.write_to_clipboard(ClipboardItem::new_string(
@@ -992,6 +1011,20 @@ impl Block {
         self.code_language_is_selecting = false;
     }
 
+    pub(crate) fn on_code_language_mouse_up_out(
+        &mut self,
+        _: &MouseUpEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // GPUI dispatches mouse_up_out during capture; do not stop propagation
+        // here, or controls under the pointer cannot synthesize on_click.
+        if self.code_language_is_selecting {
+            self.code_language_is_selecting = false;
+            cx.notify();
+        }
+    }
+
     pub(crate) fn on_code_language_mouse_move(
         &mut self,
         event: &MouseMoveEvent,
@@ -999,6 +1032,13 @@ impl Block {
         cx: &mut Context<Self>,
     ) {
         if self.code_language_is_selecting {
+            // A stale selecting flag can survive a missed mouse-up. Only extend
+            // the selection while the platform still reports an active drag.
+            if !event.dragging() {
+                self.code_language_is_selecting = false;
+                cx.notify();
+                return;
+            }
             cx.stop_propagation();
             self.select_code_language_to(
                 self.code_language_index_for_mouse_position(event.position),
@@ -1128,6 +1168,13 @@ impl Block {
         cx: &mut Context<Self>,
     ) {
         if self.is_selecting {
+            // A stale selecting flag can survive a missed mouse-up. Only extend
+            // the selection while the platform still reports an active drag.
+            if !event.dragging() {
+                self.is_selecting = false;
+                cx.notify();
+                return;
+            }
             self.select_to(self.index_for_mouse_position(event.position), cx);
         }
     }

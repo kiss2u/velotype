@@ -117,9 +117,10 @@ impl Editor {
         &mut self,
         _event: &MouseUpEvent,
         _window: &mut Window,
-        _cx: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) {
         self.cross_block_drag = None;
+        self.end_block_pointer_selection_sessions(cx);
     }
 
     pub(super) fn on_copy_capture(
@@ -448,7 +449,7 @@ impl Editor {
                     cx,
                     crate::components::BlockRecord::paragraph(source.clone()),
                 );
-                block.update(cx, |block, _cx| block.set_source_raw_mode());
+                block.update(cx, |block, _cx| block.set_source_document_mode());
                 self.document.replace_roots(vec![block], cx);
                 self.table_cells.clear();
             }

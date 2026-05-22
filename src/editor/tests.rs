@@ -2080,6 +2080,71 @@ async fn toggle_view_mode_ends_stale_code_block_pointer_selection(cx: &mut TestA
 }
 
 #[gpui::test]
+async fn ctrl_enter_exits_focused_math_block(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    let (editor, mut cx) =
+        cx.add_window_view(|_window, cx| Editor::from_markdown(cx, "$$n^2$$".to_string(), None));
+
+    editor.update(cx, |editor, cx| {
+        let block = editor.document.visible_blocks()[0].entity.clone();
+        editor.focus_block(block.entity_id());
+        block.update(cx, |block, block_cx| {
+            block.move_to(block.visible_len(), block_cx);
+        });
+    });
+    redraw(&mut cx);
+
+    cx.simulate_keystrokes("ctrl-enter");
+    redraw(&mut cx);
+
+    editor.update(cx, |editor, cx| {
+        let visible = editor.document.visible_blocks();
+        assert_eq!(visible.len(), 2);
+        assert_eq!(visible[0].entity.read(cx).kind(), BlockKind::MathBlock);
+        assert_eq!(visible[0].entity.read(cx).display_text(), "$$n^2$$");
+        assert_eq!(visible[1].entity.read(cx).kind(), BlockKind::Paragraph);
+        assert_eq!(visible[1].entity.read(cx).display_text(), "");
+        assert_eq!(editor.document.markdown_text(cx), "$$n^2$$\n\n");
+    });
+}
+
+#[gpui::test]
+async fn ctrl_enter_exits_focused_table_cell(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    let markdown = ["| A | B |", "| --- | --- |", "| 1 | 2 |"].join("\n");
+    let (editor, mut cx) =
+        cx.add_window_view(move |_window, cx| Editor::from_markdown(cx, markdown, None));
+
+    editor.update(cx, |editor, cx| {
+        let table = editor.document.first_root().expect("table root").clone();
+        let cell = table
+            .read(cx)
+            .table_runtime
+            .as_ref()
+            .expect("table runtime")
+            .rows[0][0]
+            .clone();
+        editor.focus_block(cell.entity_id());
+        cell.update(cx, |block, block_cx| {
+            block.move_to(block.visible_len(), block_cx);
+        });
+    });
+    redraw(&mut cx);
+
+    cx.simulate_keystrokes("ctrl-enter");
+    redraw(&mut cx);
+
+    editor.update(cx, |editor, cx| {
+        let visible = editor.document.visible_blocks();
+        assert_eq!(visible.len(), 2);
+        assert_eq!(visible[0].entity.read(cx).kind(), BlockKind::Table);
+        assert_eq!(visible[1].entity.read(cx).kind(), BlockKind::Paragraph);
+        assert_eq!(visible[1].entity.read(cx).display_text(), "");
+        assert_eq!(editor.active_entity_id, Some(visible[1].entity.entity_id()));
+    });
+}
+
+#[gpui::test]
 async fn ending_editor_pointer_selection_sessions_keeps_normal_selection(cx: &mut TestAppContext) {
     let editor =
         cx.new(|cx| Editor::from_markdown(cx, "```rust\nfn main() {}\n```".to_string(), None));

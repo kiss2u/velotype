@@ -12,6 +12,11 @@ use crate::theme::{FontWeightDef, Theme};
 
 /// Builds a full HTML document with embedded CSS derived from the active theme.
 pub(crate) fn render_html(markdown: &str, theme: &Theme, title: &str) -> String {
+    let document_lang = if contains_tibetan_text(markdown) || contains_tibetan_text(title) {
+        "bo"
+    } else {
+        "en"
+    };
     let rewritten = rewrite_visible_comment_blocks(markdown);
     let rewritten = rewrite_unsafe_html_blocks(&rewritten);
     let rewritten = rewrite_display_math_blocks(&rewritten, theme);
@@ -29,7 +34,8 @@ pub(crate) fn render_html(markdown: &str, theme: &Theme, title: &str) -> String 
     html::push_html(&mut body, parser);
 
     format!(
-        "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>{}</title>\n<style>\n{}\n</style>\n</head>\n<body>\n<main class=\"vlt-document\">\n{}</main>\n</body>\n</html>\n",
+        "<!doctype html>\n<html lang=\"{}\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>{}</title>\n<style>\n{}\n</style>\n</head>\n<body>\n<main class=\"vlt-document\">\n{}</main>\n</body>\n</html>\n",
+        document_lang,
         escape_html(title),
         theme_css(theme),
         body
@@ -726,7 +732,7 @@ hr {{ border: 0; border-top: 1px solid; border-color: var(--vlt-border); }}
         css_color(c.callout_warning_border),
         css_color(c.callout_caution_bg),
         css_color(c.callout_caution_border),
-        "system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif",
+        "system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", \"Noto Serif Tibetan\", \"Noto Sans Tibetan\", \"Microsoft Himalaya\", Kailasa, \"BabelStone Tibetan\", sans-serif",
         t.text_size,
         t.text_line_height,
         css_font_weight(&t.h1_weight),
@@ -749,6 +755,11 @@ hr {{ border: 0; border-top: 1px solid; border-color: var(--vlt-border); }}
         t.code_size,
         d.code_bg_radius
     )
+}
+
+fn contains_tibetan_text(text: &str) -> bool {
+    text.chars()
+        .any(|ch| ('\u{0f00}'..='\u{0fff}').contains(&ch))
 }
 
 fn css_color(color: Hsla) -> String {
@@ -796,7 +807,7 @@ fn escape_html(input: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::render_html;
+    use super::{contains_tibetan_text, render_html};
     use crate::theme::Theme;
 
     #[test]
@@ -804,11 +815,29 @@ mod tests {
         let html = render_html("# Title\n\ntext", &Theme::default_theme(), "Doc");
 
         assert!(html.starts_with("<!doctype html>"));
+        assert!(html.contains("<html lang=\"en\">"));
         assert!(html.contains("<title>Doc</title>"));
         assert!(html.contains("<style>"));
         assert!(html.contains("--vlt-bg:"));
         assert!(html.contains("<h1>Title</h1>"));
         assert!(html.contains("<p>text</p>"));
+    }
+
+    #[test]
+    fn detects_tibetan_text_for_document_language() {
+        assert!(contains_tibetan_text("བདག་གི"));
+        assert!(!contains_tibetan_text("中文 text"));
+    }
+
+    #[test]
+    fn exports_tibetan_with_language_and_font_fallbacks() {
+        let markdown = "༄༅།།དཔལ་ལྡན།། བདག་གི།། ";
+        let html = render_html(markdown, &Theme::default_theme(), "Doc");
+
+        assert!(html.contains("<html lang=\"bo\">"));
+        assert!(html.contains("།། བདག"));
+        assert!(html.contains("\"Noto Serif Tibetan\""));
+        assert!(html.contains("\"Microsoft Himalaya\""));
     }
 
     #[test]

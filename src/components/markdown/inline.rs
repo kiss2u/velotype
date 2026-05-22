@@ -3226,6 +3226,31 @@ mod tests {
     }
 
     #[test]
+    fn preserves_tibetan_spaces_through_inline_round_trip() {
+        let markdown = "༄༅།།དཔལ་ལྡན་རྩ་བའི་བླ་མ་རིན་པོ་ཆེ།། བདག་གི་སྤྱི་བོར་པདྨའི་གདན་བཞུགས་ནས།། ";
+        let tree = InlineTextTree::from_markdown(markdown);
+        let serialized = tree.serialize_markdown();
+
+        assert_eq!(tree.visible_text(), markdown);
+        assert!(tree.visible_text().contains("།། བདག"));
+        assert!(tree.visible_text().ends_with(' '));
+        assert_eq!(serialized, markdown);
+        assert_eq!(
+            InlineTextTree::from_markdown(&serialized).visible_text(),
+            markdown
+        );
+    }
+
+    #[test]
+    fn preserves_chinese_spaces_through_inline_round_trip() {
+        let markdown = "中文 文本 ";
+        let tree = InlineTextTree::from_markdown(markdown);
+
+        assert_eq!(tree.visible_text(), markdown);
+        assert_eq!(tree.serialize_markdown(), markdown);
+    }
+
+    #[test]
     fn toggle_style_operates_on_selected_slice_only() {
         let mut tree = InlineTextTree::plain("123");
         assert!(tree.toggle_bold(1..3));

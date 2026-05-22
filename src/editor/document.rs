@@ -2070,6 +2070,41 @@ mod tests {
     }
 
     #[gpui::test]
+    async fn preserves_tibetan_spaces_in_paragraph_round_trip(cx: &mut TestAppContext) {
+        let tibetan = "༄༅།།དཔལ་ལྡན་རྩ་བའི་བླ་མ་རིན་པོ་ཆེ།། བདག་གི་སྤྱི་བོར་པདྨའི་གདན་བཞུགས་ནས།། ";
+        let editor = cx.new(|cx| Editor::from_markdown(cx, tibetan.to_string(), None));
+
+        editor.update(cx, |editor, cx| {
+            let visible = editor.document.visible_blocks();
+            assert_eq!(visible.len(), 1);
+            assert_eq!(visible[0].entity.read(cx).display_text(), tibetan);
+            assert!(visible[0].entity.read(cx).display_text().contains("།། བདག"));
+            assert!(visible[0].entity.read(cx).display_text().ends_with(' '));
+            assert_eq!(editor.document.markdown_text(cx), tibetan);
+
+            editor.toggle_view_mode(cx);
+            editor.toggle_view_mode(cx);
+
+            let visible = editor.document.visible_blocks();
+            assert_eq!(visible[0].entity.read(cx).display_text(), tibetan);
+            assert_eq!(editor.document.markdown_text(cx), tibetan);
+        });
+    }
+
+    #[gpui::test]
+    async fn preserves_chinese_spaces_in_paragraph_round_trip(cx: &mut TestAppContext) {
+        let chinese = "中文 文本 ";
+        let editor = cx.new(|cx| Editor::from_markdown(cx, chinese.to_string(), None));
+
+        editor.update(cx, |editor, cx| {
+            let visible = editor.document.visible_blocks();
+            assert_eq!(visible.len(), 1);
+            assert_eq!(visible[0].entity.read(cx).display_text(), chinese);
+            assert_eq!(editor.document.markdown_text(cx), chinese);
+        });
+    }
+
+    #[gpui::test]
     async fn preserves_hard_break_spaces_in_simple_quote(cx: &mut TestAppContext) {
         let editor = cx.new(|cx| Editor::from_markdown(cx, "> alpha  \n> beta".to_string(), None));
 

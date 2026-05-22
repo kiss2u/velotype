@@ -392,6 +392,37 @@ impl Block {
         self.inline_math_source_edit_original.is_some()
     }
 
+    pub(crate) fn split_inline_math_source_edit_for_newline(&mut self) -> Option<InlineTextTree> {
+        self.inline_math_source_edit_original.as_ref()?;
+
+        let raw_markdown = self.record.title.visible_text().to_string();
+        let len = raw_markdown.len();
+        let start = self.selected_range.start.min(len);
+        let end = self.selected_range.end.min(len);
+        let leading_raw = &raw_markdown[..start];
+        let trailing_raw = &raw_markdown[end..];
+        let leading = InlineTextTree::from_markdown_with_link_references(
+            leading_raw,
+            &self.link_reference_definitions,
+        );
+        let trailing = InlineTextTree::from_markdown_with_link_references(
+            trailing_raw,
+            &self.link_reference_definitions,
+        );
+
+        self.inline_math_source_edit_original = None;
+        self.record.set_title(leading);
+        self.edit_mode = EditMode::for_kind(&self.record.kind);
+        self.clear_inline_projection();
+        self.sync_render_cache();
+        let cursor = self.visible_len();
+        self.selected_range = cursor..cursor;
+        self.marked_range = None;
+        self.collapsed_caret_affinity = CollapsedCaretAffinity::Default;
+
+        Some(trailing)
+    }
+
     pub(crate) fn sync_inline_math_source_edit_for_focus(&mut self, focused: bool) -> bool {
         if focused
             && self.inline_math_source_edit_original.is_none()
@@ -1707,6 +1738,30 @@ impl Block {
         self.sync_edit_mode_from_kind();
         self.sync_render_cache();
         self.assign_collapsed_selection_offset(0, CollapsedCaretAffinity::Default, None);
+        self.marked_range = None;
+        self.cursor_blink_epoch = Instant::now();
+        self.clear_vertical_motion();
+        cx.emit(BlockEvent::Changed);
+        cx.notify();
+    }
+
+    pub(crate) fn enter_math_block(&mut self, cx: &mut Context<Self>) {
+        const EMPTY_DISPLAY_MATH_SOURCE: &str = "$$\n\n$$";
+        const EMPTY_DISPLAY_MATH_CURSOR: usize = "$$\n".len();
+
+        self.prepare_undo_capture(UndoCaptureKind::NonCoalescible, cx);
+        self.clear_inline_projection();
+        self.record.kind = BlockKind::MathBlock;
+        self.record
+            .set_title(InlineTextTree::plain(EMPTY_DISPLAY_MATH_SOURCE));
+        self.quote_reparse_requested = false;
+        self.sync_edit_mode_from_kind();
+        self.sync_render_cache();
+        self.assign_collapsed_selection_offset(
+            EMPTY_DISPLAY_MATH_CURSOR,
+            CollapsedCaretAffinity::Default,
+            None,
+        );
         self.marked_range = None;
         self.cursor_blink_epoch = Instant::now();
         self.clear_vertical_motion();

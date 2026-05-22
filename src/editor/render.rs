@@ -19,6 +19,37 @@ pub(crate) fn open_about_github_url(cx: &mut App) {
     cx.open_url(ABOUT_GITHUB_URL);
 }
 
+fn editor_text_font() -> Font {
+    let mut font = font(".SystemUIFont");
+    font.fallbacks = Some(FontFallbacks::from_fonts(
+        tibetan_font_fallbacks_for_target_os(std::env::consts::OS),
+    ));
+    font
+}
+
+fn tibetan_font_fallbacks_for_target_os(target_os: &str) -> Vec<String> {
+    let families = match target_os {
+        "windows" => &[
+            "Microsoft Himalaya",
+            "Noto Serif Tibetan",
+            "Noto Sans Tibetan",
+            "BabelStone Tibetan",
+        ][..],
+        "macos" => &["Kailasa", "Noto Serif Tibetan", "Noto Sans Tibetan"][..],
+        _ => &[
+            "Noto Serif Tibetan",
+            "Noto Sans Tibetan",
+            "Microsoft Himalaya",
+            "Kailasa",
+            "BabelStone Tibetan",
+        ][..],
+    };
+    families
+        .iter()
+        .map(|family| (*family).to_string())
+        .collect()
+}
+
 /// Adjacent-row metadata used to collapse spacing inside visual groups.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct RenderedRowSpacingInfo {
@@ -1713,10 +1744,12 @@ impl Render for Editor {
             .h_full()
             .relative()
             .bg(theme.colors.editor_background)
+            .font(editor_text_font())
             .capture_action(cx.listener(Self::on_copy_capture))
             .capture_action(cx.listener(Self::on_cut_capture))
             .capture_action(cx.listener(Self::on_delete_capture))
             .capture_action(cx.listener(Self::on_delete_back_capture))
+            .capture_key_down(cx.listener(Self::on_editor_key_down_capture))
             .can_drop(|dragged, _window, _cx| dragged.is::<ExternalPaths>())
             .on_drop::<ExternalPaths>(cx.listener(Self::on_external_paths_drop))
             .on_action(cx.listener(Self::on_undo))
@@ -1725,6 +1758,7 @@ impl Render for Editor {
             .on_action(cx.listener(Self::on_export_html))
             .on_action(cx.listener(Self::on_export_pdf))
             .on_action(cx.listener(Self::on_quit_application))
+            .on_action(cx.listener(Self::on_toggle_view_mode_action))
             .on_action(cx.listener(Self::on_dismiss_transient_ui));
         let base = if let Some(menu_bar) = self.render_in_window_menu_bar(&theme, cx) {
             base.child(menu_bar)
@@ -1770,10 +1804,11 @@ impl Render for Editor {
 #[cfg(test)]
 mod tests {
     use super::{
-        NoRecentFiles, RenderedRowSpacingInfo, callout_row_top_gap,
+        NoRecentFiles, RenderedRowSpacingInfo, callout_row_top_gap, editor_text_font,
         in_window_menu_bar_height_for_target_os, menu_bar_button_width, menu_panel_left,
         menu_panel_width_for_labels, owned_menu_item_labels, rendered_row_top_gap,
         submenu_bridge_geometry, supports_in_window_menu_for_target_os,
+        tibetan_font_fallbacks_for_target_os,
     };
     use crate::theme::Theme;
     use gpui::{OwnedMenu, OwnedMenuItem};
@@ -1794,6 +1829,39 @@ mod tests {
             4.0,
         );
         assert_eq!(gap, 0.0);
+    }
+
+    #[test]
+    fn editor_text_font_keeps_system_ui_as_primary_family() {
+        assert_eq!(editor_text_font().family.to_string(), ".SystemUIFont");
+    }
+
+    #[test]
+    fn tibetan_font_fallbacks_prioritize_platform_defaults() {
+        assert_eq!(
+            tibetan_font_fallbacks_for_target_os("windows")
+                .first()
+                .map(String::as_str),
+            Some("Microsoft Himalaya")
+        );
+        assert_eq!(
+            tibetan_font_fallbacks_for_target_os("macos")
+                .first()
+                .map(String::as_str),
+            Some("Kailasa")
+        );
+        assert_eq!(
+            tibetan_font_fallbacks_for_target_os("linux")
+                .first()
+                .map(String::as_str),
+            Some("Noto Serif Tibetan")
+        );
+        assert_eq!(
+            tibetan_font_fallbacks_for_target_os("unknown")
+                .first()
+                .map(String::as_str),
+            Some("Noto Serif Tibetan")
+        );
     }
 
     #[test]

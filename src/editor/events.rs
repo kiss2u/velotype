@@ -11,10 +11,89 @@ use gpui::*;
 
 use super::Editor;
 use crate::components::{
-    BlockEvent, BlockKind, BlockRecord, CollapsedCaretAffinity, InlineTextTree, TableCellPosition,
+    BlockEvent, BlockKind, BlockRecord, CollapsedCaretAffinity, IndentBlock, InlineTextTree,
+    OutdentBlock, TableCellPosition,
 };
 
 impl Editor {
+    fn focused_block_for_tab_key(
+        &self,
+        window: &mut Window,
+        cx: &App,
+    ) -> Option<Entity<super::Block>> {
+        let is_focused = |block: &Entity<super::Block>| {
+            let block = block.read(cx);
+            block.focus_handle.is_focused(window)
+                || block.code_language_focus_handle.is_focused(window)
+        };
+
+        if let Some(block) = self
+            .active_entity_id
+            .and_then(|entity_id| self.focusable_entity_by_id(entity_id))
+            .filter(is_focused)
+        {
+            return Some(block);
+        }
+
+        for binding in self.table_cells.values() {
+            if is_focused(&binding.cell) {
+                return Some(binding.cell.clone());
+            }
+        }
+
+        self.document
+            .visible_blocks()
+            .iter()
+            .find_map(|visible| is_focused(&visible.entity).then(|| visible.entity.clone()))
+    }
+
+    pub(crate) fn on_editor_key_down_capture(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if event.keystroke.key != "tab" {
+            return;
+        }
+
+        let modifiers = event.keystroke.modifiers;
+        if modifiers.control || modifiers.platform || modifiers.alt || modifiers.function {
+            return;
+        }
+
+        let Some(target) = self.focused_block_for_tab_key(window, cx) else {
+            return;
+        };
+
+        let handles_tab = {
+            let block = target.read(cx);
+            if block.code_language_focus_handle.is_focused(window) {
+                cx.stop_propagation();
+                return;
+            }
+            block.is_table_cell()
+                || block.kind().is_list_item()
+                || block.kind() == BlockKind::Paragraph
+                || block.kind().is_code_block()
+        };
+
+        if !handles_tab {
+            return;
+        }
+
+        if modifiers.shift {
+            target.update(cx, |block, block_cx| {
+                block.on_outdent_block(&OutdentBlock, window, block_cx);
+            });
+        } else {
+            target.update(cx, |block, block_cx| {
+                block.on_indent_block(&IndentBlock, window, block_cx);
+            });
+        }
+        cx.stop_propagation();
+    }
+
     fn build_plain_paste_blocks_from_lines(
         cx: &mut Context<Self>,
         lines: &[String],
@@ -504,6 +583,31 @@ impl Editor {
                     *delta,
                     cx,
                 );
+            }
+            BlockEvent::RequestNewline { .. } => {
+                let Some(location) = self
+                    .document
+                    .find_block_location(binding.table_block.entity_id())
+                else {
+                    return;
+                };
+                self.clear_table_axis_preview(cx);
+                self.clear_table_axis_selection(cx);
+                self.sync_table_record_from_runtime(&binding.table_block, cx);
+                self.prepare_undo_capture(crate::components::UndoCaptureKind::NonCoalescible, cx);
+                let new_block = Self::new_block(cx, BlockRecord::paragraph(String::new()));
+                self.document.insert_blocks_at(
+                    location.parent,
+                    location.index + 1,
+                    vec![new_block.clone()],
+                    cx,
+                );
+                self.rebuild_image_runtimes(cx);
+                self.focus_block(new_block.entity_id());
+                self.mark_dirty(cx);
+                self.request_active_block_scroll_into_view(cx);
+                self.finalize_pending_undo_capture(cx);
+                cx.notify();
             }
             BlockEvent::RequestFocus => {
                 self.close_menu_bar(cx);
@@ -1698,6 +1802,275 @@ mod tests {
     }
 
     #[gpui::test]
+    async fn enter_inside_inline_math_source_edit_creates_new_block(cx: &mut TestAppContext) {
+        let cx = cx.add_empty_window();
+        let editor = cx.new(|cx| Editor::from_markdown(cx, "$n^2$".to_string(), None));
+
+        cx.update(|window, cx| {
+            editor.update(cx, |editor, cx| {
+                let block = editor.document.visible_blocks()[0].entity.clone();
+                block.update(cx, |block, block_cx| {
+                    assert!(block.sync_inline_math_source_edit_for_focus(true));
+                    block.move_to(block.visible_len(), block_cx);
+                    block.on_newline(&Newline, window, block_cx);
+                });
+            });
+        });
+
+        editor.update(cx, |editor, cx| {
+            let visible = editor.document.visible_blocks();
+            assert_eq!(visible.len(), 2);
+            assert_eq!(visible[0].entity.read(cx).kind(), BlockKind::Paragraph);
+            assert_eq!(visible[0].entity.read(cx).display_text(), "$n^2$");
+            assert!(!visible[0].entity.read(cx).uses_raw_text_editing());
+            assert_eq!(visible[1].entity.read(cx).kind(), BlockKind::Paragraph);
+            assert_eq!(visible[1].entity.read(cx).display_text(), "");
+            assert_eq!(editor.document.markdown_text(cx), "$n^2$\n\n");
+        });
+    }
+
+    #[gpui::test]
+    async fn math_block_exit_shortcut_creates_plain_text_block(cx: &mut TestAppContext) {
+        let cx = cx.add_empty_window();
+        let editor = cx.new(|cx| Editor::from_markdown(cx, "$$n^2$$".to_string(), None));
+
+        cx.update(|window, cx| {
+            editor.update(cx, |editor, cx| {
+                let block = editor.document.visible_blocks()[0].entity.clone();
+                block.update(cx, |block, block_cx| {
+                    block.on_exit_code_block(&ExitCodeBlock, window, block_cx);
+                });
+            });
+        });
+
+        editor.update(cx, |editor, cx| {
+            let visible = editor.document.visible_blocks();
+            assert_eq!(visible.len(), 2);
+            assert_eq!(visible[0].entity.read(cx).kind(), BlockKind::MathBlock);
+            assert_eq!(visible[0].entity.read(cx).display_text(), "$$n^2$$");
+            assert_eq!(visible[1].entity.read(cx).kind(), BlockKind::Paragraph);
+            assert_eq!(visible[1].entity.read(cx).display_text(), "");
+            assert_eq!(editor.document.markdown_text(cx), "$$n^2$$\n\n");
+        });
+    }
+
+    #[gpui::test]
+    async fn dollar_dollar_enter_creates_editable_math_block(cx: &mut TestAppContext) {
+        let cx = cx.add_empty_window();
+        let editor = cx.new(|cx| Editor::from_markdown(cx, String::new(), None));
+
+        cx.update(|window, cx| {
+            editor.update(cx, |editor, cx| {
+                let block = editor.document.visible_blocks()[0].entity.clone();
+                block.update(cx, |block, block_cx| {
+                    block.replace_text_in_visible_range(
+                        0..block.visible_len(),
+                        "$$",
+                        None,
+                        false,
+                        block_cx,
+                    );
+                    block.move_to(block.visible_len(), block_cx);
+                    block.on_newline(&Newline, window, block_cx);
+                });
+            });
+        });
+
+        editor.update(cx, |editor, cx| {
+            let visible = editor.document.visible_blocks();
+            assert_eq!(visible.len(), 1);
+            let block = visible[0].entity.read(cx);
+            assert_eq!(block.kind(), BlockKind::MathBlock);
+            assert_eq!(block.display_text(), "$$\n\n$$");
+            assert_eq!(block.selected_range, 3..3);
+            assert!(block.uses_raw_text_editing());
+            assert_eq!(editor.document.markdown_text(cx), "$$\n\n$$");
+        });
+    }
+
+    #[gpui::test]
+    async fn enter_inside_math_block_keeps_local_formula_editing(cx: &mut TestAppContext) {
+        let cx = cx.add_empty_window();
+        let editor = cx.new(|cx| Editor::from_markdown(cx, "$$n^2$$".to_string(), None));
+
+        cx.update(|window, cx| {
+            editor.update(cx, |editor, cx| {
+                let block = editor.document.visible_blocks()[0].entity.clone();
+                block.update(cx, |block, block_cx| {
+                    block.move_to(3, block_cx);
+                    block.on_newline(&Newline, window, block_cx);
+                });
+            });
+        });
+
+        editor.update(cx, |editor, cx| {
+            let visible = editor.document.visible_blocks();
+            assert_eq!(visible.len(), 1);
+            assert_eq!(visible[0].entity.read(cx).kind(), BlockKind::MathBlock);
+            assert_eq!(visible[0].entity.read(cx).display_text(), "$$n\n^2$$");
+            assert_eq!(editor.document.markdown_text(cx), "$$n\n^2$$");
+        });
+    }
+
+    #[gpui::test]
+    async fn auto_created_math_block_exit_shortcut_creates_plain_text_block(
+        cx: &mut TestAppContext,
+    ) {
+        let cx = cx.add_empty_window();
+        let editor = cx.new(|cx| Editor::from_markdown(cx, String::new(), None));
+
+        cx.update(|window, cx| {
+            editor.update(cx, |editor, cx| {
+                let block = editor.document.visible_blocks()[0].entity.clone();
+                block.update(cx, |block, block_cx| {
+                    block.replace_text_in_visible_range(
+                        0..block.visible_len(),
+                        "$$",
+                        None,
+                        false,
+                        block_cx,
+                    );
+                    block.move_to(block.visible_len(), block_cx);
+                    block.on_newline(&Newline, window, block_cx);
+                    block.on_exit_code_block(&ExitCodeBlock, window, block_cx);
+                });
+            });
+        });
+
+        editor.update(cx, |editor, cx| {
+            let visible = editor.document.visible_blocks();
+            assert_eq!(visible.len(), 2);
+            assert_eq!(visible[0].entity.read(cx).kind(), BlockKind::MathBlock);
+            assert_eq!(visible[0].entity.read(cx).display_text(), "$$\n\n$$");
+            assert_eq!(visible[1].entity.read(cx).kind(), BlockKind::Paragraph);
+            assert_eq!(visible[1].entity.read(cx).display_text(), "");
+            assert_eq!(editor.document.markdown_text(cx), "$$\n\n$$\n\n");
+        });
+    }
+
+    #[gpui::test]
+    async fn raw_like_block_exit_shortcut_creates_plain_text_block(cx: &mut TestAppContext) {
+        let cx = cx.add_empty_window();
+        let cases = [
+            (
+                BlockRecord::html("<div>\ncontent\n</div>"),
+                BlockKind::HtmlBlock,
+                "<div>\ncontent\n</div>",
+            ),
+            (
+                BlockRecord::mermaid("```mermaid\nflowchart LR\nA-->B\n```"),
+                BlockKind::MermaidBlock,
+                "```mermaid\nflowchart LR\nA-->B\n```",
+            ),
+            (
+                BlockRecord::raw_markdown("::: custom\ncontent\n:::"),
+                BlockKind::RawMarkdown,
+                "::: custom\ncontent\n:::",
+            ),
+            (
+                BlockRecord::comment("<!--\ncomment\n-->"),
+                BlockKind::Comment,
+                "<!--\ncomment\n-->",
+            ),
+        ];
+
+        for (record, kind, text) in cases {
+            let editor = cx.new(|cx| {
+                let mut editor = Editor::from_markdown(cx, String::new(), None);
+                let block = Editor::new_block(cx, record.clone());
+                editor.document.replace_roots(vec![block], cx);
+                editor
+            });
+
+            cx.update(|window, cx| {
+                editor.update(cx, |editor, cx| {
+                    let block = editor.document.visible_blocks()[0].entity.clone();
+                    block.update(cx, |block, block_cx| {
+                        block.on_exit_code_block(&ExitCodeBlock, window, block_cx);
+                    });
+                });
+            });
+
+            editor.update(cx, |editor, cx| {
+                let visible = editor.document.visible_blocks();
+                assert_eq!(visible.len(), 2);
+                assert_eq!(visible[0].entity.read(cx).kind(), kind);
+                assert_eq!(visible[0].entity.read(cx).display_text(), text);
+                assert_eq!(visible[1].entity.read(cx).kind(), BlockKind::Paragraph);
+                assert_eq!(visible[1].entity.read(cx).display_text(), "");
+            });
+        }
+    }
+
+    #[gpui::test]
+    async fn table_cell_enter_still_moves_to_next_row(cx: &mut TestAppContext) {
+        let cx = cx.add_empty_window();
+        let markdown = ["| A | B |", "| --- | --- |", "| 1 | 2 |", "| 3 | 4 |"].join("\n");
+        let editor = cx.new(|cx| Editor::from_markdown(cx, markdown, None));
+
+        let mut next_cell_id = None;
+        cx.update(|window, cx| {
+            editor.update(cx, |editor, cx| {
+                let table = editor.document.first_root().expect("table root").clone();
+                let (cell, expected_next_cell_id) = {
+                    let table = table.read(cx);
+                    let runtime = table.table_runtime.as_ref().expect("table runtime");
+                    (runtime.rows[0][0].clone(), runtime.rows[1][0].entity_id())
+                };
+                next_cell_id = Some(expected_next_cell_id);
+                cell.update(cx, |block, block_cx| {
+                    block.on_newline(&Newline, window, block_cx);
+                });
+            });
+        });
+
+        editor.update(cx, |editor, _cx| {
+            assert_eq!(editor.document.visible_blocks().len(), 1);
+            assert_eq!(editor.pending_focus, next_cell_id);
+        });
+    }
+
+    #[gpui::test]
+    async fn table_cell_exit_shortcut_inserts_sibling_after_table(cx: &mut TestAppContext) {
+        let cx = cx.add_empty_window();
+        let markdown = ["> [!NOTE]", "> | A | B |", "> | --- | --- |", "> | 1 | 2 |"].join("\n");
+        let editor = cx.new(|cx| Editor::from_markdown(cx, markdown, None));
+
+        cx.update(|window, cx| {
+            editor.update(cx, |editor, cx| {
+                let callout = editor.document.first_root().expect("callout root").clone();
+                let table = callout
+                    .read(cx)
+                    .children
+                    .iter()
+                    .find(|child| child.read(cx).kind() == BlockKind::Table)
+                    .expect("nested table")
+                    .clone();
+                let cell = table
+                    .read(cx)
+                    .table_runtime
+                    .as_ref()
+                    .expect("table runtime")
+                    .rows[0][0]
+                    .clone();
+                cell.update(cx, |block, block_cx| {
+                    block.on_exit_code_block(&ExitCodeBlock, window, block_cx);
+                });
+            });
+        });
+
+        editor.update(cx, |editor, cx| {
+            let callout = editor.document.first_root().expect("callout root").clone();
+            let children = callout.read(cx).children.clone();
+            assert_eq!(children.len(), 2);
+            assert_eq!(children[0].read(cx).kind(), BlockKind::Table);
+            assert_eq!(children[1].read(cx).kind(), BlockKind::Paragraph);
+            assert_eq!(children[1].read(cx).display_text(), "");
+            assert_eq!(editor.pending_focus, Some(children[1].entity_id()));
+        });
+    }
+
+    #[gpui::test]
     async fn plain_multiline_paste_with_scripts_splits_physical_lines(cx: &mut TestAppContext) {
         let editor = cx.new(|cx| Editor::from_markdown(cx, String::new(), None));
 
@@ -1793,6 +2166,33 @@ mod tests {
                 editor.document.markdown_text(cx),
                 "<sub>2</sub>\n\n<sup>n</sup>\n\n<span style=\"color: rgba(255,0,0,1.000);\">x</span>"
             );
+        });
+    }
+
+    #[gpui::test]
+    async fn plain_paste_preserves_tibetan_spaces(cx: &mut TestAppContext) {
+        let editor = cx.new(|cx| Editor::from_markdown(cx, String::new(), None));
+        let tibetan = "༄༅།།དཔལ་ལྡན་རྩ་བའི་བླ་མ་རིན་པོ་ཆེ།། བདག་གི་སྤྱི་བོར་པདྨའི་གདན་བཞུགས་ནས།། ";
+
+        editor.update(cx, |editor, cx| {
+            let block = editor.document.visible_blocks()[0].entity.clone();
+            editor.on_block_event(
+                block,
+                &BlockEvent::RequestPasteMultiline {
+                    leading: InlineTextTree::plain(String::new()),
+                    lines: vec![tibetan.to_string()],
+                    trailing: InlineTextTree::plain(String::new()),
+                    split_physical_lines: true,
+                },
+                cx,
+            );
+
+            let visible = editor.document.visible_blocks();
+            assert_eq!(visible.len(), 1);
+            assert_eq!(visible[0].entity.read(cx).display_text(), tibetan);
+            assert!(visible[0].entity.read(cx).display_text().contains("།། བདག"));
+            assert!(visible[0].entity.read(cx).display_text().ends_with(' '));
+            assert_eq!(editor.document.markdown_text(cx), tibetan);
         });
     }
 

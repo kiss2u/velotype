@@ -220,6 +220,18 @@ impl Block {
             return;
         }
 
+        if self.inline_math_source_editing() {
+            self.prepare_undo_capture(UndoCaptureKind::NonCoalescible, cx);
+            if let Some(trailing) = self.split_inline_math_source_edit_for_newline() {
+                self.mark_changed(cx);
+                cx.emit(BlockEvent::RequestNewline {
+                    trailing,
+                    source_already_mutated: true,
+                });
+            }
+            return;
+        }
+
         if self.is_source_raw_mode() {
             if !self.selected_range.is_empty() {
                 self.replace_text_in_range(None, "", window, cx);
@@ -238,6 +250,15 @@ impl Block {
                 trailing: InlineTextTree::plain(String::new()),
                 source_already_mutated: true,
             });
+            return;
+        }
+
+        if self.kind() == BlockKind::Paragraph
+            && self.selected_range.is_empty()
+            && self.cursor_offset() == self.visible_len()
+            && self.display_text() == "$$"
+        {
+            self.enter_math_block(cx);
             return;
         }
 
@@ -453,7 +474,7 @@ impl Block {
     pub(crate) fn on_indent_block(
         &mut self,
         _: &IndentBlock,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if self.is_table_cell() {
@@ -462,6 +483,10 @@ impl Block {
         }
         if self.can_adjust_list_nesting() {
             cx.emit(BlockEvent::RequestIndent);
+            return;
+        }
+        if self.kind() == BlockKind::Paragraph || self.kind().is_code_block() {
+            self.replace_text_in_range(None, "    ", window, cx);
         }
     }
 
@@ -478,6 +503,33 @@ impl Block {
         if self.can_outdent_list_nesting() {
             cx.emit(BlockEvent::RequestOutdent);
         }
+    }
+
+    pub(crate) fn on_block_key_down(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if event.keystroke.key != "tab" {
+            return;
+        }
+
+        let modifiers = event.keystroke.modifiers;
+        if modifiers.control || modifiers.platform || modifiers.alt || modifiers.function {
+            return;
+        }
+
+        if self.code_language_focus_handle.is_focused(window) {
+            return;
+        }
+
+        if modifiers.shift {
+            self.on_outdent_block(&OutdentBlock, window, cx);
+        } else {
+            self.on_indent_block(&IndentBlock, window, cx);
+        }
+        cx.stop_propagation();
     }
 
     pub(crate) fn on_focus_prev(
@@ -1336,7 +1388,18 @@ impl Block {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.kind().is_code_block() {
+        let exits_multiline_block = self.is_table_cell()
+            || self.kind().is_code_block()
+            || matches!(
+                self.kind(),
+                BlockKind::MathBlock
+                    | BlockKind::HtmlBlock
+                    | BlockKind::MermaidBlock
+                    | BlockKind::RawMarkdown
+                    | BlockKind::Comment
+            );
+
+        if exits_multiline_block {
             cx.emit(BlockEvent::RequestNewline {
                 trailing: InlineTextTree::plain(String::new()),
                 source_already_mutated: false,

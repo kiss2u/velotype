@@ -55,4 +55,14 @@ mod tests {
         assert!(pdf.starts_with(b"%PDF"));
         assert!(pdf.len() > 1000);
     }
+
+    #[test]
+    fn renders_tibetan_pdf_bytes() {
+        let markdown = "༄༅།།དཔལ་ལྡན་རྩ་བའི་བླ་མ་རིན་པོ་ཆེ།། བདག་གི་སྤྱི་བོར་པདྨའི་གདན་བཞུགས་ནས།། ";
+        let pdf = render_pdf(markdown, &Theme::default_theme(), "Doc", None)
+            .expect("tibetan pdf should render");
+
+        assert!(pdf.starts_with(b"%PDF"));
+        assert!(pdf.len() > 1000);
+    }
 }

@@ -136,6 +136,11 @@ pub struct Block {
     /// Cached projection used to show editable inline delimiters for the
     /// currently touched inline span(s).
     pub(crate) projection: Option<ExpandedInlineProjection>,
+    /// Inputs that produced the current `projection`. When the next
+    /// `sync_inline_projection_for_focus` computes the same inputs, the
+    /// rebuild is skipped — saves a full O(fragments + text) walk per
+    /// render frame (cursor blink + every arrow keypress).
+    projection_cache_key: Option<(bool, Range<usize>, Option<Range<usize>>)>,
     inline_math_source_edit_original: Option<InlineTextTree>,
     collapsed_caret_affinity: CollapsedCaretAffinity,
     /// When true, block-level shortcuts and inline formatting are
@@ -232,6 +237,7 @@ impl Block {
             vertical_motion_x: None,
             cursor_blink_task: None,
             projection: None,
+            projection_cache_key: None,
             inline_math_source_edit_original: None,
             collapsed_caret_affinity: CollapsedCaretAffinity::Default,
             edit_mode,
@@ -560,6 +566,7 @@ impl Block {
         self.sync_code_highlight();
         self.sync_image_runtime();
         self.projection = None;
+        self.projection_cache_key = None;
         if keep_projection {
             self.rebuild_inline_projection(clean_selected.clone(), clean_marked.clone());
             if clean_selected.is_empty() {
@@ -780,7 +787,8 @@ impl Block {
     }
 
     pub(crate) fn sync_inline_projection_for_focus(&mut self, focused: bool) {
-        if !focused || !self.edit_mode.supports_inline_projection() {
+        let supports_projection = self.edit_mode.supports_inline_projection();
+        if !focused || !supports_projection {
             self.clear_inline_projection();
             return;
         }
@@ -806,6 +814,11 @@ impl Block {
             .marked_range
             .clone()
             .map(|range| self.current_to_clean_range(range));
+        if self.projection_cache_key.as_ref()
+            == Some(&(supports_projection, clean_selected.clone(), clean_marked.clone()))
+        {
+            return;
+        }
         let (clean_anchor, clean_focus) = self.clean_selection_anchor_focus();
         let collapsed_affinity = self.current_collapsed_caret_affinity();
         self.rebuild_inline_projection(clean_selected.clone(), clean_marked.clone());
@@ -843,6 +856,7 @@ impl Block {
 
     pub(crate) fn clear_inline_projection(&mut self) {
         if self.projection.is_none() {
+            self.projection_cache_key = None;
             return;
         }
 
@@ -852,6 +866,7 @@ impl Block {
             .map(|range| self.current_to_clean_range(range));
         let (clean_anchor, clean_focus) = self.clean_selection_anchor_focus();
         self.projection = None;
+        self.projection_cache_key = None;
         self.set_selection_from_anchor_focus(clean_anchor, clean_focus);
         self.marked_range = clean_marked;
         self.collapsed_caret_affinity = CollapsedCaretAffinity::Default;
@@ -862,6 +877,11 @@ impl Block {
         clean_selected: Range<usize>,
         clean_marked: Option<Range<usize>>,
     ) {
+        self.projection_cache_key = Some((
+            self.edit_mode.supports_inline_projection(),
+            clean_selected.clone(),
+            clean_marked.clone(),
+        ));
         self.projection = ExpandedInlineProjection::build(
             &self.record.title.fragments,
             clean_selected,

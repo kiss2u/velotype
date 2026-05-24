@@ -1397,20 +1397,21 @@ impl Render for Editor {
                 || self.scrollbar_hovered
                 || Instant::now() <= self.scrollbar_visible_until);
 
-        let spacing_infos = visible_blocks
-            .iter()
-            .map(|visible| {
-                visible
-                    .entity
-                    .read_with(cx, |block, _cx| RenderedRowSpacingInfo::from_block(block))
-            })
-            .collect::<Vec<_>>();
+        // Spacing metadata is read on demand instead of pre-collected into a
+        // Vec<RenderedRowSpacingInfo> sized to all visible blocks. For long
+        // documents this skips a ~tens-of-KB allocation per frame; per-block
+        // entity.read_with is a cheap immutable lock + 7-field struct copy.
+        let spacing_for = |index: usize| -> RenderedRowSpacingInfo {
+            visible_blocks[index]
+                .entity
+                .read_with(cx, |block, _cx| RenderedRowSpacingInfo::from_block(block))
+        };
         let mut previous_row_spacing = None;
         let mut block_rows = Vec::new();
         let mut index = 0usize;
         while index < visible_blocks.len() {
             let first_visible = visible_blocks[index].clone();
-            let first_spacing = spacing_infos[index];
+            let first_spacing = spacing_for(index);
             let top_gap = rendered_row_top_gap(previous_row_spacing, first_spacing, d.block_gap);
 
             if let (Some(callout_anchor), Some(callout_variant)) =
@@ -1420,18 +1421,18 @@ impl Render for Editor {
                 let mut group_end = index;
                 let mut previous_callout_row = None;
                 while group_end < visible_blocks.len()
-                    && spacing_infos[group_end].callout_anchor == Some(callout_anchor)
+                    && spacing_for(group_end).callout_anchor == Some(callout_anchor)
                 {
-                    let row_spacing = spacing_infos[group_end];
+                    let row_spacing = spacing_for(group_end);
                     if let Some(footnote_anchor) = row_spacing.footnote_anchor {
                         let mut footnote_children = Vec::new();
                         let mut footnote_end = group_end;
                         let mut previous_footnote_row = None;
                         while footnote_end < visible_blocks.len()
-                            && spacing_infos[footnote_end].callout_anchor == Some(callout_anchor)
-                            && spacing_infos[footnote_end].footnote_anchor == Some(footnote_anchor)
+                            && spacing_for(footnote_end).callout_anchor == Some(callout_anchor)
+                            && spacing_for(footnote_end).footnote_anchor == Some(footnote_anchor)
                         {
-                            let footnote_spacing = spacing_infos[footnote_end];
+                            let footnote_spacing = spacing_for(footnote_end);
                             let entity = visible_blocks[footnote_end].entity.clone();
                             let row = div()
                                 .w_full()
@@ -1468,7 +1469,7 @@ impl Render for Editor {
                                 .child(footnote_group_shell(footnote_children, &theme, d))
                                 .into_any_element(),
                         );
-                        previous_callout_row = Some(spacing_infos[footnote_end - 1]);
+                        previous_callout_row = Some(spacing_for(footnote_end - 1));
                         group_end = footnote_end;
                         continue;
                     }
@@ -1519,7 +1520,7 @@ impl Render for Editor {
                         .children(group_children)
                         .into_any_element(),
                 );
-                previous_row_spacing = Some(spacing_infos[group_end - 1]);
+                previous_row_spacing = Some(spacing_for(group_end - 1));
                 index = group_end;
                 continue;
             }
@@ -1529,9 +1530,9 @@ impl Render for Editor {
                 let mut group_end = index;
                 let mut previous_footnote_row = None;
                 while group_end < visible_blocks.len()
-                    && spacing_infos[group_end].footnote_anchor == Some(footnote_anchor)
+                    && spacing_for(group_end).footnote_anchor == Some(footnote_anchor)
                 {
-                    let row_spacing = spacing_infos[group_end];
+                    let row_spacing = spacing_for(group_end);
                     let entity = visible_blocks[group_end].entity.clone();
                     let row = div()
                         .w_full()
@@ -1564,7 +1565,7 @@ impl Render for Editor {
                         .child(footnote_group_shell(group_children, &theme, d))
                         .into_any_element(),
                 );
-                previous_row_spacing = Some(spacing_infos[group_end - 1]);
+                previous_row_spacing = Some(spacing_for(group_end - 1));
                 index = group_end;
                 continue;
             }

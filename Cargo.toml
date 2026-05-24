@@ -87,3 +87,48 @@ lto = true
 opt-level = "s"
 panic = "abort"
 strip = true
+
+# Keep our own code in dev (fast incremental compile, debuggable), but
+# build the heavy framework/IO crates at release-level optimization so debug
+# runs aren't dominated by their per-call overhead. The hot path on every
+# render goes through gpui/taffy/text-shaping; without these overrides each
+# block in a long document costs hundreds of µs/frame purely from O0 code.
+[profile.dev.package]
+gpui = { opt-level = 3 }
+gpui_macros = { opt-level = 3 }
+gpui_http_client = { opt-level = 3 }
+gpui_sum_tree = { opt-level = 3 }
+gpui_util = { opt-level = 3 }
+gpui_util_macros = { opt-level = 3 }
+gpui_collections = { opt-level = 3 }
+gpui_media = { opt-level = 3 }
+gpui_refineable = { opt-level = 3 }
+gpui_semantic_version = { opt-level = 3 }
+taffy = { opt-level = 3 }
+cosmic-text = { opt-level = 3 }
+rustybuzz = { opt-level = 3 }
+ttf-parser = { opt-level = 3 }
+resvg = { opt-level = 3 }
+usvg = { opt-level = 3 }
+zed-font-kit = { opt-level = 3 }
+unicode-segmentation = { opt-level = 3 }
+pulldown-cmark = { opt-level = 3 }
+tree-sitter = { opt-level = 3 }
+tree-sitter-highlight = { opt-level = 3 }
+ratex-layout = { opt-level = 3 }
+ratex-parser = { opt-level = 3 }
+ratex-svg = { opt-level = 3 }
+smol = { opt-level = 3 }
+async-task = { opt-level = 3 }
+parking_lot = { opt-level = 3 }
+parking_lot_core = { opt-level = 3 }
+hashbrown = { opt-level = 3 }
+smallvec = { opt-level = 3 }
+lyon = { opt-level = 3 }
+lyon_geom = { opt-level = 3 }
+lyon_path = { opt-level = 3 }
+lyon_tessellation = { opt-level = 3 }
+etagere = { opt-level = 3 }
+image = { opt-level = 3 }
+serde = { opt-level = 3 }
+serde_json = { opt-level = 3 }

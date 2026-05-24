@@ -867,11 +867,11 @@ impl Element for BlockTextElement {
     ) -> (LayoutId, Self::RequestLayoutState) {
         let theme = cx.global::<ThemeManager>().current().clone();
         let input = self.input.read(cx);
-        let content = input.display_text().to_string();
+        let shared_text = input.shared_display_text();
         let is_placeholder = self.is_placeholder;
         let show_inline_code_backgrounds = !input.is_source_raw_mode();
         let show_source_line_numbers = input.show_source_line_numbers();
-        let source_line_count = source_line_count(&content);
+        let source_line_count = source_line_count(shared_text.as_ref());
         let style = window.text_style();
 
         let (display_text, text_color): (SharedString, Hsla) = if is_placeholder {
@@ -883,7 +883,7 @@ impl Element for BlockTextElement {
                     .unwrap_or(theme.colors.text_placeholder),
             )
         } else {
-            (content.into(), style.color)
+            (shared_text, style.color)
         };
 
         let run = TextRun {

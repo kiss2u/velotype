@@ -2560,15 +2560,10 @@ fn is_single_tilde_delimiter(tokens: &[CharToken], index: usize) -> bool {
 }
 
 fn matches_sequence(tokens: &[CharToken], index: usize, sequence: &str) -> bool {
-    let chars = sequence.chars().collect::<Vec<_>>();
-    if index + chars.len() > tokens.len() {
-        return false;
-    }
-
-    chars
-        .iter()
+    sequence
+        .chars()
         .enumerate()
-        .all(|(offset, ch)| tokens[index + offset].ch == *ch)
+        .all(|(offset, ch)| tokens.get(index + offset).is_some_and(|t| t.ch == ch))
 }
 
 fn escaped_sequence_token_len(tokens: &[CharToken], index: usize) -> Option<usize> {

@@ -136,6 +136,14 @@ harness = false
 name = "render_loop"
 harness = false
 
+[[bench]]
+name = "html_attr_parser"
+harness = false
+
+[[bench]]
+name = "matches_sequence"
+harness = false
+
 # Stop Cargo from also linking the libtest bench harness against the bin —
 # without this, Criterion-specific CLI flags (`--save-baseline`, etc.) trip
 # the libtest stub before Criterion's `main` runs (rust-lang/rust#47241).

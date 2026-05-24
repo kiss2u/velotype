@@ -554,25 +554,39 @@ fn parse_tag_token(raw: &str, start: usize) -> Option<TagToken> {
     None
 }
 
+/// Peek the next char at `index` without advancing. Returns `None` at EOF.
+#[inline]
+fn peek_char(source: &str, index: usize) -> Option<char> {
+    source[index..].chars().next()
+}
+
+/// Advance `index` past the next char and return it. Returns `None` at EOF.
+/// Encapsulates the byte-index ↔ UTF-8-boundary invariant so callers that
+/// don't need the char's value can't drift into a panic by hand-incrementing
+/// `index` by anything other than `ch.len_utf8()`. Loops that *do* need the
+/// char for a check should peek with [`peek_char`], inspect the value, and
+/// then advance with `index += ch.len_utf8()` — see [`parse_html_attrs`] —
+/// so the char is read only once per iteration.
+#[inline]
+fn advance_char(source: &str, index: &mut usize) -> Option<char> {
+    let ch = source[*index..].chars().next()?;
+    *index += ch.len_utf8();
+    Some(ch)
+}
+
 pub(crate) fn parse_html_attrs(source: &str) -> Vec<HtmlAttr> {
     let mut attrs = Vec::new();
     let mut index = 0usize;
     while index < source.len() {
-        while index < source.len()
-            && source[index..]
-                .chars()
-                .next()
-                .is_some_and(|ch| ch.is_whitespace() || ch == '/')
-        {
-            index += source[index..].chars().next().unwrap().len_utf8();
+        while let Some(ch) = peek_char(source, index).filter(|c| c.is_whitespace() || *c == '/') {
+            index += ch.len_utf8();
         }
         if index >= source.len() {
             break;
         }
 
         let start = index;
-        while index < source.len() {
-            let ch = source[index..].chars().next().unwrap();
+        while let Some(ch) = peek_char(source, index) {
             if ch.is_whitespace() || ch == '=' || ch == '/' {
                 break;
             }
@@ -580,54 +594,44 @@ pub(crate) fn parse_html_attrs(source: &str) -> Vec<HtmlAttr> {
         }
         let name_end = index;
         if name_end == start {
-            index += source[index..].chars().next().unwrap().len_utf8();
+            // Lone separator we couldn't classify — consume one char and retry.
+            advance_char(source, &mut index);
             continue;
         }
 
-        while index < source.len()
-            && source[index..]
-                .chars()
-                .next()
-                .is_some_and(|ch| ch.is_whitespace())
-        {
-            index += source[index..].chars().next().unwrap().len_utf8();
+        while let Some(ch) = peek_char(source, index).filter(|c| c.is_whitespace()) {
+            index += ch.len_utf8();
         }
 
         let mut value = None;
         if source[index..].starts_with('=') {
             index += 1;
-            while index < source.len()
-                && source[index..]
-                    .chars()
-                    .next()
-                    .is_some_and(|ch| ch.is_whitespace())
-            {
-                index += source[index..].chars().next().unwrap().len_utf8();
+            while let Some(ch) = peek_char(source, index).filter(|c| c.is_whitespace()) {
+                index += ch.len_utf8();
             }
 
-            if index < source.len() {
-                let ch = source[index..].chars().next().unwrap();
-                if ch == '"' || ch == '\'' {
+            if let Some(quote) = peek_char(source, index).filter(|c| *c == '"' || *c == '\'') {
+                index += quote.len_utf8();
+                let value_start = index;
+                while let Some(ch) = peek_char(source, index) {
+                    if ch == quote {
+                        break;
+                    }
                     index += ch.len_utf8();
-                    let value_start = index;
-                    while index < source.len() && !source[index..].starts_with(ch) {
-                        index += source[index..].chars().next().unwrap().len_utf8();
-                    }
-                    value = Some(source[value_start..index].to_string());
-                    if index < source.len() {
-                        index += ch.len_utf8();
-                    }
-                } else {
-                    let value_start = index;
-                    while index < source.len() {
-                        let ch = source[index..].chars().next().unwrap();
-                        if ch.is_whitespace() || ch == '/' {
-                            break;
-                        }
-                        index += ch.len_utf8();
-                    }
-                    value = Some(source[value_start..index].to_string());
                 }
+                value = Some(source[value_start..index].to_string());
+                if index < source.len() {
+                    index += quote.len_utf8();
+                }
+            } else if peek_char(source, index).is_some() {
+                let value_start = index;
+                while let Some(ch) = peek_char(source, index) {
+                    if ch.is_whitespace() || ch == '/' {
+                        break;
+                    }
+                    index += ch.len_utf8();
+                }
+                value = Some(source[value_start..index].to_string());
             }
         }
 

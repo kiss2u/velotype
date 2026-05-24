@@ -393,12 +393,21 @@ pub(crate) fn parse_image_reference_definitions(markdown: &str) -> ImageReferenc
 }
 
 pub(crate) fn normalize_reference_label(label: &str) -> Option<String> {
-    let normalized = label.split_whitespace().collect::<Vec<_>>().join(" ");
-    let trimmed = normalized.trim();
-    if trimmed.is_empty() {
+    // Single-pass concat: walk the words once, push to the output with a
+    // leading separator on all but the first. Avoids the intermediate
+    // Vec<&str> allocation that split_whitespace().collect::<Vec<_>>()
+    // produces before .join("") copies again.
+    let mut normalized = String::with_capacity(label.len());
+    for word in label.split_whitespace() {
+        if !normalized.is_empty() {
+            normalized.push(' ');
+        }
+        normalized.push_str(word);
+    }
+    if normalized.is_empty() {
         None
     } else {
-        Some(trimmed.to_lowercase())
+        Some(normalized.to_lowercase())
     }
 }
 

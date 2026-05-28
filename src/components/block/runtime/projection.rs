@@ -25,6 +25,8 @@ pub(super) struct ExpandedInlineSegment {
 pub(super) enum ExpandedInlineKind {
     /// Link label and target syntax.
     Link,
+    /// Bold Markdown delimiters.
+    BoldMarkdown,
     /// Strikethrough delimiters.
     Strikethrough,
     /// Code span backtick delimiters.
@@ -43,6 +45,7 @@ impl ExpandedInlineKind {
     fn applies_to(self, style: InlineStyle) -> bool {
         match self {
             Self::Link => false,
+            Self::BoldMarkdown => style.bold,
             Self::Strikethrough => style.strikethrough,
             Self::Code => style.code,
             Self::SuperscriptMarkdown | Self::SuperscriptHtml => {
@@ -57,6 +60,7 @@ impl ExpandedInlineKind {
     fn open_marker(self) -> &'static str {
         match self {
             Self::Link => "[",
+            Self::BoldMarkdown => "**",
             Self::Strikethrough => "~~",
             Self::Code => "`",
             Self::SuperscriptMarkdown => "^",
@@ -78,6 +82,7 @@ impl ExpandedInlineKind {
     pub(super) fn style_flag(self) -> Option<StyleFlag> {
         match self {
             Self::Link => None,
+            Self::BoldMarkdown => Some(StyleFlag::Bold),
             Self::Strikethrough => Some(StyleFlag::Strikethrough),
             Self::Code => Some(StyleFlag::Code),
             Self::SuperscriptMarkdown | Self::SuperscriptHtml => Some(StyleFlag::Superscript),
@@ -88,12 +93,13 @@ impl ExpandedInlineKind {
     fn projection_rank(self) -> u8 {
         match self {
             Self::Link => 0,
-            Self::Strikethrough => 1,
+            Self::BoldMarkdown => 1,
+            Self::Strikethrough => 2,
             Self::SuperscriptMarkdown
             | Self::SuperscriptHtml
             | Self::SubscriptMarkdown
-            | Self::SubscriptHtml => 2,
-            Self::Code => 3,
+            | Self::SubscriptHtml => 3,
+            Self::Code => 4,
         }
     }
 }
@@ -640,7 +646,10 @@ impl ExpandedInlineProjection {
         if any_expanded {
             for segment in &segments {
                 match segment.kind {
-                    ExpandedInlineSegmentKind::OpeningDelimiter(ExpandedInlineKind::Code)
+                    ExpandedInlineSegmentKind::OpeningDelimiter(
+                        ExpandedInlineKind::BoldMarkdown,
+                    )
+                    | ExpandedInlineSegmentKind::OpeningDelimiter(ExpandedInlineKind::Code)
                     | ExpandedInlineSegmentKind::OpeningDelimiter(
                         ExpandedInlineKind::Strikethrough,
                     )
@@ -653,7 +662,10 @@ impl ExpandedInlineProjection {
                         clean_to_display_cursor[segment.clean_range.start] =
                             segment.display_range.end;
                     }
-                    ExpandedInlineSegmentKind::ClosingDelimiter(ExpandedInlineKind::Code)
+                    ExpandedInlineSegmentKind::ClosingDelimiter(
+                        ExpandedInlineKind::BoldMarkdown,
+                    )
+                    | ExpandedInlineSegmentKind::ClosingDelimiter(ExpandedInlineKind::Code)
                     | ExpandedInlineSegmentKind::ClosingDelimiter(
                         ExpandedInlineKind::Strikethrough,
                     )
@@ -839,6 +851,7 @@ impl ExpandedInlineProjection {
         let mut kinds = Vec::new();
         let script_kind = Self::script_projection_kind(fragments, fragment_index);
         for kind in [
+            Some(ExpandedInlineKind::BoldMarkdown),
             Some(ExpandedInlineKind::Strikethrough),
             script_kind,
             Some(ExpandedInlineKind::Code),

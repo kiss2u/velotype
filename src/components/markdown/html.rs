@@ -94,6 +94,36 @@ pub(crate) struct HtmlInlineStyle {
 
 impl Eq for HtmlInlineStyle {}
 
+/// Safe data extracted from a standalone HTML `<img>` block.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct HtmlImageBlock {
+    pub(crate) src: String,
+    pub(crate) alt: String,
+    pub(crate) zoom: f32,
+}
+
+impl HtmlImageBlock {
+    pub(crate) fn zoom_factor(&self) -> f32 {
+        self.zoom.clamp(0.1, 3.0)
+    }
+
+    pub(crate) fn to_sanitized_html_with_src(&self, src: &str) -> String {
+        let mut html = format!("<img src=\"{}\"", escape_html_attr(src));
+        if !self.alt.is_empty() {
+            html.push_str(" alt=\"");
+            html.push_str(&escape_html_attr(&self.alt));
+            html.push('"');
+        }
+        if (self.zoom_factor() - 1.0).abs() > f32::EPSILON {
+            html.push_str(" style=\"zoom: ");
+            html.push_str(&css_number(self.zoom_factor() * 100.0));
+            html.push_str("%;\"");
+        }
+        html.push('>');
+        html
+    }
+}
+
 /// A classified HTML node.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct HtmlNode {
@@ -275,6 +305,10 @@ pub(crate) fn parse_html_document(raw_source: &str) -> HtmlDocument {
 /// their HTML shape, while raw text nodes are escaped so browsers cannot
 /// execute or interpret them.
 pub(crate) fn sanitize_html_for_export(raw_source: &str) -> String {
+    if let Some(image) = parse_html_image_block(raw_source) {
+        return image.to_sanitized_html_with_src(&image.src);
+    }
+
     let document = parse_html_document(raw_source);
     if !document.is_semantic() {
         return format!(
@@ -334,6 +368,12 @@ fn sanitize_node_for_export(node: &HtmlNode) -> String {
 }
 
 fn sanitized_open_tag(node: &HtmlNode) -> String {
+    if node.tag_name == "img"
+        && let Some(image) = parse_html_image_block(&node.raw_source)
+    {
+        return image.to_sanitized_html_with_src(&image.src);
+    }
+
     let mut open = format!("<{}", node.tag_name);
     for attr in &node.attrs {
         if attr.name == "style" {
@@ -554,25 +594,39 @@ fn parse_tag_token(raw: &str, start: usize) -> Option<TagToken> {
     None
 }
 
+/// Peek the next char at `index` without advancing. Returns `None` at EOF.
+#[inline]
+fn peek_char(source: &str, index: usize) -> Option<char> {
+    source[index..].chars().next()
+}
+
+/// Advance `index` past the next char and return it. Returns `None` at EOF.
+/// Encapsulates the byte-index ↔ UTF-8-boundary invariant so callers that
+/// don't need the char's value can't drift into a panic by hand-incrementing
+/// `index` by anything other than `ch.len_utf8()`. Loops that *do* need the
+/// char for a check should peek with [`peek_char`], inspect the value, and
+/// then advance with `index += ch.len_utf8()` — see [`parse_html_attrs`] —
+/// so the char is read only once per iteration.
+#[inline]
+fn advance_char(source: &str, index: &mut usize) -> Option<char> {
+    let ch = source[*index..].chars().next()?;
+    *index += ch.len_utf8();
+    Some(ch)
+}
+
 pub(crate) fn parse_html_attrs(source: &str) -> Vec<HtmlAttr> {
     let mut attrs = Vec::new();
     let mut index = 0usize;
     while index < source.len() {
-        while index < source.len()
-            && source[index..]
-                .chars()
-                .next()
-                .is_some_and(|ch| ch.is_whitespace() || ch == '/')
-        {
-            index += source[index..].chars().next().unwrap().len_utf8();
+        while let Some(ch) = peek_char(source, index).filter(|c| c.is_whitespace() || *c == '/') {
+            index += ch.len_utf8();
         }
         if index >= source.len() {
             break;
         }
 
         let start = index;
-        while index < source.len() {
-            let ch = source[index..].chars().next().unwrap();
+        while let Some(ch) = peek_char(source, index) {
             if ch.is_whitespace() || ch == '=' || ch == '/' {
                 break;
             }
@@ -580,54 +634,44 @@ pub(crate) fn parse_html_attrs(source: &str) -> Vec<HtmlAttr> {
         }
         let name_end = index;
         if name_end == start {
-            index += source[index..].chars().next().unwrap().len_utf8();
+            // Lone separator we couldn't classify — consume one char and retry.
+            advance_char(source, &mut index);
             continue;
         }
 
-        while index < source.len()
-            && source[index..]
-                .chars()
-                .next()
-                .is_some_and(|ch| ch.is_whitespace())
-        {
-            index += source[index..].chars().next().unwrap().len_utf8();
+        while let Some(ch) = peek_char(source, index).filter(|c| c.is_whitespace()) {
+            index += ch.len_utf8();
         }
 
         let mut value = None;
         if source[index..].starts_with('=') {
             index += 1;
-            while index < source.len()
-                && source[index..]
-                    .chars()
-                    .next()
-                    .is_some_and(|ch| ch.is_whitespace())
-            {
-                index += source[index..].chars().next().unwrap().len_utf8();
+            while let Some(ch) = peek_char(source, index).filter(|c| c.is_whitespace()) {
+                index += ch.len_utf8();
             }
 
-            if index < source.len() {
-                let ch = source[index..].chars().next().unwrap();
-                if ch == '"' || ch == '\'' {
+            if let Some(quote) = peek_char(source, index).filter(|c| *c == '"' || *c == '\'') {
+                index += quote.len_utf8();
+                let value_start = index;
+                while let Some(ch) = peek_char(source, index) {
+                    if ch == quote {
+                        break;
+                    }
                     index += ch.len_utf8();
-                    let value_start = index;
-                    while index < source.len() && !source[index..].starts_with(ch) {
-                        index += source[index..].chars().next().unwrap().len_utf8();
-                    }
-                    value = Some(source[value_start..index].to_string());
-                    if index < source.len() {
-                        index += ch.len_utf8();
-                    }
-                } else {
-                    let value_start = index;
-                    while index < source.len() {
-                        let ch = source[index..].chars().next().unwrap();
-                        if ch.is_whitespace() || ch == '/' {
-                            break;
-                        }
-                        index += ch.len_utf8();
-                    }
-                    value = Some(source[value_start..index].to_string());
                 }
+                value = Some(source[value_start..index].to_string());
+                if index < source.len() {
+                    index += quote.len_utf8();
+                }
+            } else if peek_char(source, index).is_some() {
+                let value_start = index;
+                while let Some(ch) = peek_char(source, index) {
+                    if ch.is_whitespace() || ch == '/' {
+                        break;
+                    }
+                    index += ch.len_utf8();
+                }
+                value = Some(source[value_start..index].to_string());
             }
         }
 
@@ -730,6 +774,65 @@ pub(crate) fn attr_value<'a>(node: &'a HtmlNode, name: &str) -> Option<&'a str> 
         .and_then(|attr| attr.value.as_deref())
 }
 
+pub(crate) fn parse_html_image_block(raw_source: &str) -> Option<HtmlImageBlock> {
+    let trimmed = raw_source.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let token = parse_tag_token(trimmed, 0)?;
+    if token.kind != TagKind::Open
+        || token.name != "img"
+        || token.source_range != (0..trimmed.len())
+    {
+        return None;
+    }
+    if has_dangerous_attrs(&token.attrs) {
+        return None;
+    }
+
+    let src = attr_value_in_attrs(&token.attrs, "src")?.trim().to_string();
+    if src.is_empty() {
+        return None;
+    }
+
+    let alt = attr_value_in_attrs(&token.attrs, "alt")
+        .unwrap_or_default()
+        .to_string();
+    let zoom = attr_value_in_attrs(&token.attrs, "style")
+        .and_then(parse_html_zoom)
+        .unwrap_or(1.0);
+
+    Some(HtmlImageBlock { src, alt, zoom })
+}
+
+fn attr_value_in_attrs<'a>(attrs: &'a [HtmlAttr], name: &str) -> Option<&'a str> {
+    attrs
+        .iter()
+        .find(|attr| attr.name == name)
+        .and_then(|attr| attr.value.as_deref())
+}
+
+pub(crate) fn parse_html_zoom(style: &str) -> Option<f32> {
+    for declaration in style.split(';') {
+        let Some((property, value)) = declaration.split_once(':') else {
+            continue;
+        };
+        if !property.trim().eq_ignore_ascii_case("zoom") {
+            continue;
+        }
+
+        let value = value.trim();
+        let parsed = if let Some(percent) = value.strip_suffix('%') {
+            parse_css_number(percent)? / 100.0
+        } else {
+            parse_css_number(value)?
+        };
+        return Some(parsed.clamp(0.1, 3.0));
+    }
+    None
+}
+
 pub(crate) fn parse_inline_style(style: &str) -> HtmlInlineStyle {
     let mut parsed = HtmlInlineStyle::default();
     for declaration in style.split(';') {
@@ -773,28 +876,27 @@ fn parse_css_color(value: &str) -> Option<HtmlCssColor> {
             alpha: 0.0,
         }));
     }
-    if let Some(hex) = value.strip_prefix('#') {
-        if let Ok((red, green, blue, alpha)) = parse_hash_color(hex.as_bytes()) {
-            return Some(HtmlCssColor::Rgba(HtmlCssRgba {
-                red,
-                green,
-                blue,
-                alpha,
-            }));
-        }
+    if let Some(hex) = value.strip_prefix('#')
+        && let Ok((red, green, blue, alpha)) = parse_hash_color(hex.as_bytes())
+    {
+        return Some(HtmlCssColor::Rgba(HtmlCssRgba {
+            red,
+            green,
+            blue,
+            alpha,
+        }));
     }
     if value
         .chars()
         .all(|ch| ch.is_ascii_alphabetic() || ch == '-')
+        && let Ok((red, green, blue)) = parse_named_color(value)
     {
-        if let Ok((red, green, blue)) = parse_named_color(value) {
-            return Some(HtmlCssColor::Rgba(HtmlCssRgba {
-                red,
-                green,
-                blue,
-                alpha: 1.0,
-            }));
-        }
+        return Some(HtmlCssColor::Rgba(HtmlCssRgba {
+            red,
+            green,
+            blue,
+            alpha: 1.0,
+        }));
     }
     parse_rgb_color(value).or_else(|| parse_hsl_color(value))
 }
@@ -900,7 +1002,7 @@ fn parse_alpha_component(value: &str) -> Option<f32> {
 fn parse_hue(value: &str) -> Option<f32> {
     let trimmed = value.trim().to_ascii_lowercase();
     if let Some(value) = trimmed.strip_suffix("deg") {
-        return Some(parse_css_number(value)?);
+        return parse_css_number(value);
     }
     if let Some(value) = trimmed.strip_suffix("turn") {
         return Some(parse_css_number(value)? * 360.0);
@@ -908,7 +1010,7 @@ fn parse_hue(value: &str) -> Option<f32> {
     if let Some(value) = trimmed.strip_suffix("rad") {
         return Some(parse_css_number(value)? * 180.0 / std::f32::consts::PI);
     }
-    Some(parse_css_number(&trimmed)?)
+    parse_css_number(&trimmed)
 }
 
 fn hsl_to_rgb(hue_degrees: f32, saturation: f32, lightness: f32) -> (u8, u8, u8) {
@@ -1082,6 +1184,39 @@ mod tests {
     fn dangerous_attribute_classifies_as_raw_text() {
         let doc = parse_html_document("<a href=\"javascript:alert(1)\">bad</a>");
         assert_eq!(doc.safety, HtmlSafetyClass::RawTextBlock);
+    }
+
+    #[test]
+    fn parses_standalone_html_image_block() {
+        let image = parse_html_image_block(
+            "<img src=\"./xxx/abc.png\" alt=\"alt text\" style=\"zoom:80%;\" />",
+        )
+        .expect("html image");
+
+        assert_eq!(image.src, "./xxx/abc.png");
+        assert_eq!(image.alt, "alt text");
+        assert_eq!(image.zoom, 0.8);
+    }
+
+    #[test]
+    fn html_image_zoom_ignores_other_style_declarations() {
+        let image = parse_html_image_block(
+            "<img src=\"a.png\" alt=\"a\" style=\"color:red; zoom: 120%; width:10px\" />",
+        )
+        .expect("html image");
+
+        assert_eq!(image.zoom, 1.2);
+        assert_eq!(
+            image.to_sanitized_html_with_src("a.png"),
+            "<img src=\"a.png\" alt=\"a\" style=\"zoom: 120%;\">"
+        );
+    }
+
+    #[test]
+    fn invalid_html_image_blocks_are_not_images() {
+        assert!(parse_html_image_block("<img alt=\"missing src\" />").is_none());
+        assert!(parse_html_image_block("<img src=\"\" />").is_none());
+        assert!(parse_html_image_block("<span><img src=\"x.png\" /></span>").is_none());
     }
 
     #[test]

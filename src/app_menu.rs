@@ -13,7 +13,7 @@ use crate::app_identity::VELOTYPE_APP_ID;
 use crate::components::{
     AddLanguageConfig, AddThemeConfig, CheckForUpdates, ExportHtml, ExportPdf, NewWindow,
     NoRecentFiles, OpenFile, OpenPreferences, OpenRecentFile, QuitApplication, SaveDocument,
-    SaveDocumentAs, SelectLanguage, SelectTheme, ShowAbout,
+    SaveDocumentAs, SelectLanguage, SelectTheme, ShowAbout, ToggleWorkspace,
 };
 use crate::config::{
     apply_configured_language, apply_configured_theme, import_language_config_and_select,
@@ -35,12 +35,16 @@ impl Global for AppMenuState {}
 
 fn window_title(file_path: Option<&Path>) -> SharedString {
     if let Some(path) = file_path {
+        // OsStr::to_string_lossy returns Cow<str>; calling .to_string() on
+        // it always allocates a fresh String, even for the valid-UTF-8 path
+        // (the common case). Borrow the Cow directly into format! — its
+        // Display impl writes the borrowed bytes straight into the output
+        // String, no intermediate allocation.
         format!(
             "Velotype - {}",
-            path.file_name().map_or_else(
-                || path.to_string_lossy().to_string(),
-                |name| name.to_string_lossy().to_string()
-            )
+            path.file_name()
+                .map(|name| name.to_string_lossy())
+                .unwrap_or_else(|| path.to_string_lossy())
         )
         .into()
     } else {
@@ -102,12 +106,12 @@ pub(crate) fn record_recent_file_from_editor(path: &Path, cx: &mut App) {
     record_recent_file_and_refresh(path, cx);
 }
 
-fn show_window_prompt(window: Option<AnyWindowHandle>, title: String, detail: &str, cx: &mut App) {
+fn show_window_prompt(window: Option<AnyWindowHandle>, title: &str, detail: &str, cx: &mut App) {
     if let Some(window) = window {
         let ok = cx.global::<I18nManager>().strings().info_dialog_ok.clone();
         let _ = window.update(cx, |_view, window, cx| {
             let buttons = [ok.as_str()];
-            let _ = window.prompt(PromptLevel::Critical, &title, Some(detail), &buttons, cx);
+            let _ = window.prompt(PromptLevel::Critical, title, Some(detail), &buttons, cx);
         });
     } else {
         eprintln!("{title}: {detail}");
@@ -164,7 +168,12 @@ fn open_recent_file_with_error_window(
         let detail = strings
             .recent_file_missing_message_template
             .replace("{path}", &path.to_string_lossy());
-        show_window_prompt(error_window, strings.recent_file_missing_title, &detail, cx);
+        show_window_prompt(
+            error_window,
+            &strings.recent_file_missing_title,
+            &detail,
+            cx,
+        );
         return;
     }
 
@@ -174,7 +183,7 @@ fn open_recent_file_with_error_window(
             .strings()
             .open_failed_title
             .clone();
-        show_window_prompt(error_window, title, &err.to_string(), cx);
+        show_window_prompt(error_window, &title, &err.to_string(), cx);
     }
 }
 
@@ -186,6 +195,7 @@ fn is_editor_scoped_menu_action(action: &dyn Action) -> bool {
         || action.as_any().is::<QuitApplication>()
         || action.as_any().is::<CheckForUpdates>()
         || action.as_any().is::<ShowAbout>()
+        || action.as_any().is::<ToggleWorkspace>()
 }
 
 fn is_window_context_menu_action(action: &dyn Action) -> bool {
@@ -292,7 +302,7 @@ pub(crate) fn dispatch_menu_action(action: &dyn Action, cx: &mut App) {
                     .strings()
                     .preferences_save_failed_title
                     .clone();
-                show_window_prompt(cx.active_window(), title, &err.to_string(), cx);
+                show_window_prompt(cx.active_window(), &title, &err.to_string(), cx);
             }
         }
     } else if let Some(action) = action.as_any().downcast_ref::<SelectLanguage>() {
@@ -309,13 +319,17 @@ pub(crate) fn dispatch_menu_action(action: &dyn Action, cx: &mut App) {
                     .strings()
                     .preferences_save_failed_title
                     .clone();
-                show_window_prompt(cx.active_window(), title, &err.to_string(), cx);
+                show_window_prompt(cx.active_window(), &title, &err.to_string(), cx);
             }
         }
     } else if action.as_any().is::<CheckForUpdates>() {
         request_update_check_on_active_editor(cx);
     } else if action.as_any().is::<ShowAbout>() {
         show_info_dialog_on_active_editor(cx, InfoDialogKind::About);
+    } else if action.as_any().is::<ToggleWorkspace>() {
+        let _ = with_active_editor(cx, |editor, window, cx| {
+            editor.toggle_workspace_drawer(window, cx);
+        });
     } else if action.as_any().is::<QuitApplication>() {
         request_close_current_editor_window(cx);
     }
@@ -376,6 +390,10 @@ pub(crate) fn dispatch_menu_action_for_editor(
     } else if action.as_any().is::<ShowAbout>() {
         let _ = target.update(cx, |editor, cx| {
             editor.show_info_dialog(InfoDialogKind::About, cx)
+        });
+    } else if action.as_any().is::<ToggleWorkspace>() {
+        let _ = target.update(cx, |editor, cx| {
+            editor.toggle_workspace_drawer(window, cx);
         });
     }
 }
@@ -444,7 +462,11 @@ fn build_menus(
         recent_files
             .iter()
             .map(|path| {
-                let label = path.to_string_lossy().to_string();
+                // into_owned on a Cow<str> reuses the Cow::Owned variant
+                // (no copy) when the OS string is valid UTF-8 — the common
+                // case — and only allocates for the lossy fallback. The
+                // previous .to_string_lossy().to_string() always allocated.
+                let label = path.to_string_lossy().into_owned();
                 MenuItem::action(label.clone(), OpenRecentFile { path: label })
             })
             .collect()
@@ -482,6 +504,13 @@ fn build_menus(
         Menu {
             name: strings.menu_theme.into(),
             items: theme_items,
+        },
+        Menu {
+            name: strings.menu_workspace.into(),
+            items: vec![MenuItem::action(
+                strings.menu_toggle_workspace.clone(),
+                ToggleWorkspace,
+            )],
         },
         Menu {
             name: strings.menu_help.into(),
@@ -532,7 +561,7 @@ fn prompt_and_open_files_with_error_window(cx: &mut App, error_window: Option<An
                             .strings()
                             .open_failed_title
                             .clone();
-                        show_window_prompt(error_window, title, &err.to_string(), cx);
+                        show_window_prompt(error_window, &title, &err.to_string(), cx);
                     }
                 }
             });
@@ -545,7 +574,7 @@ fn prompt_and_open_files_with_error_window(cx: &mut App, error_window: Option<An
                     .strings()
                     .open_failed_title
                     .clone();
-                show_window_prompt(error_window, title, &detail, cx);
+                show_window_prompt(error_window, &title, &detail, cx);
             });
         }
         Ok(Ok(None)) | Err(_) => {}
@@ -592,7 +621,7 @@ fn prompt_and_import_language_config_with_error_window(
                             .strings()
                             .config_import_failed_title
                             .clone();
-                        show_window_prompt(error_window, title, &err.to_string(), cx);
+                        show_window_prompt(error_window, &title, &err.to_string(), cx);
                     }
                 }
             });
@@ -605,7 +634,7 @@ fn prompt_and_import_language_config_with_error_window(
                     .strings()
                     .config_import_failed_title
                     .clone();
-                show_window_prompt(error_window, title, &detail, cx);
+                show_window_prompt(error_window, &title, &detail, cx);
             });
         }
         Ok(Ok(None)) | Err(_) => {}
@@ -652,7 +681,7 @@ fn prompt_and_import_theme_config_with_error_window(
                             .strings()
                             .config_import_failed_title
                             .clone();
-                        show_window_prompt(error_window, title, &err.to_string(), cx);
+                        show_window_prompt(error_window, &title, &err.to_string(), cx);
                     }
                 }
             });
@@ -665,7 +694,7 @@ fn prompt_and_import_theme_config_with_error_window(
                     .strings()
                     .config_import_failed_title
                     .clone();
-                show_window_prompt(error_window, title, &detail, cx);
+                show_window_prompt(error_window, &title, &detail, cx);
             });
         }
         Ok(Ok(None)) | Err(_) => {}
@@ -730,6 +759,9 @@ pub(crate) fn init(cx: &mut App) {
     cx.on_action(|_: &ShowAbout, cx| {
         dispatch_menu_action(&ShowAbout, cx);
     });
+    cx.on_action(|_: &ToggleWorkspace, cx| {
+        dispatch_menu_action(&ToggleWorkspace, cx);
+    });
     cx.on_action(|_: &QuitApplication, cx| {
         dispatch_menu_action(&QuitApplication, cx);
     });
@@ -777,7 +809,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             menu_names,
-            vec!["File", "Export", "Language", "Theme", "Help"]
+            vec!["File", "Export", "Language", "Theme", "Workspace", "Help"]
         );
         assert_eq!(action_name(&menus[0].items[0]), "New Window");
         assert_eq!(
@@ -789,6 +821,7 @@ mod tests {
         assert_eq!(action_name(&menus[1].items[1]), "PDF");
         assert_eq!(action_name(&menus[2].items[0]), "简体中文");
         assert_eq!(action_name(&menus[2].items[1]), "\u{2713} English");
+        assert_eq!(action_name(&menus[4].items[0]), "Toggle Workspace");
     }
 
     #[test]
@@ -806,12 +839,16 @@ mod tests {
             .iter()
             .map(|menu| menu.name.to_string())
             .collect::<Vec<_>>();
-        assert_eq!(menu_names, vec!["文件", "导出", "语言", "主题", "帮助"]);
+        assert_eq!(
+            menu_names,
+            vec!["文件", "导出", "语言", "主题", "工作区", "帮助"]
+        );
         assert_eq!(action_name(&menus[0].items[0]), "新建窗口");
         assert_eq!(action_name(&menus[1].items[0]), "HTML");
         assert_eq!(action_name(&menus[1].items[1]), "PDF");
         assert_eq!(action_name(&menus[2].items[0]), "\u{2713} 简体中文");
         assert_eq!(action_name(&menus[2].items[1]), "English");
+        assert_eq!(action_name(&menus[4].items[0]), "切换工作区");
     }
 
     #[test]
@@ -991,7 +1028,7 @@ mod tests {
         let theme_manager = ThemeManager::default();
         let i18n_manager = I18nManager::default();
         let menus = build_menus(&theme_manager, &i18n_manager, &[]);
-        let help_items = &menus[4].items;
+        let help_items = &menus[5].items;
 
         assert_eq!(help_items.len(), 3);
         match &help_items[0] {

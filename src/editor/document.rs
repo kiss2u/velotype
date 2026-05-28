@@ -551,9 +551,13 @@ fn parse_html_block_start(line: &str) -> Option<HtmlBlockStart> {
 
     Some(HtmlBlockStart::Tag {
         name: name.to_string(),
-        self_closing: rest.ends_with("/>"),
+        self_closing: rest.ends_with("/>") || is_html_void_block_tag(name),
         closes_same_line: rest.contains(&format!("</{name}>")),
     })
+}
+
+fn is_html_void_block_tag(name: &str) -> bool {
+    matches!(name.to_ascii_lowercase().as_str(), "br" | "hr" | "img")
 }
 
 fn parse_html_close_tag_name(line: &str) -> Option<String> {
@@ -740,12 +744,10 @@ fn collect_fenced_code_block(
         ));
     }
 
-    let mut code_lines = Vec::new();
-    let mut content_index = start + 1;
-    while content_index < closing_index {
-        code_lines.push(lines[content_index].clone());
-        content_index += 1;
-    }
+    // Length is known: closing_index - (start + 1). slice.to_vec()
+    // allocates the exact capacity in one shot, vs Vec::new() + while-push
+    // which doubles the buffer 2-3 times for any non-trivial code block.
+    let code_lines = lines[start + 1..closing_index].to_vec();
 
     Some((
         build_code_block(cx, fence.language.clone(), code_lines.join("\n")),
@@ -826,6 +828,10 @@ fn native_block(
     )
 }
 
+fn standalone_image_block(cx: &mut Context<Editor>, markdown: String) -> Entity<super::Block> {
+    Editor::new_block(cx, BlockRecord::paragraph(markdown.trim().to_string()))
+}
+
 fn is_standalone_image_paragraph(lines: &[String]) -> bool {
     lines.len() == 1 && parse_standalone_image(&lines[0]).is_some()
 }
@@ -835,7 +841,7 @@ fn starts_with_standalone_image_child_paragraph(lines: &[String]) -> bool {
         return false;
     }
 
-    lines.get(1).map_or(true, |next| {
+    lines.get(1).is_none_or(|next| {
         next.trim().is_empty()
             || parse_list_marker(next).is_some()
             || is_quote_start(next)
@@ -1038,11 +1044,7 @@ impl Editor {
             }
 
             if parse_standalone_image(line).is_some() {
-                roots.push(native_block(
-                    cx,
-                    BlockKind::Paragraph,
-                    line.trim().to_string(),
-                ));
+                roots.push(standalone_image_block(cx, line.to_string()));
                 index += 1;
                 continue;
             }
@@ -1327,11 +1329,7 @@ impl Editor {
                 if pending_blank_lines > 0 && (!title_markdown.is_empty() || !children.is_empty()) {
                     append_quote_separator_children(&mut children, pending_blank_lines, cx);
                 }
-                children.push(native_block(
-                    cx,
-                    BlockKind::Paragraph,
-                    line.trim().to_string(),
-                ));
+                children.push(standalone_image_block(cx, line.to_string()));
                 saw_child = true;
                 pending_blank_lines = 0;
                 index += 1;
@@ -1373,11 +1371,7 @@ impl Editor {
                 if pending_blank_lines > 0 && (!title_markdown.is_empty() || !children.is_empty()) {
                     append_quote_separator_children(&mut children, pending_blank_lines, cx);
                 }
-                children.push(native_block(
-                    cx,
-                    BlockKind::Paragraph,
-                    paragraph_lines.join("\n"),
-                ));
+                children.push(standalone_image_block(cx, paragraph_lines.join("\n")));
                 saw_child = true;
                 pending_blank_lines = 0;
                 continue;
@@ -1520,11 +1514,7 @@ impl Editor {
             }
 
             if starts_with_standalone_image_child_paragraph(&lines[index..]) {
-                children.push(native_block(
-                    cx,
-                    BlockKind::Paragraph,
-                    line.trim().to_string(),
-                ));
+                children.push(standalone_image_block(cx, line.to_string()));
                 index += 1;
                 continue;
             }
@@ -1634,16 +1624,15 @@ impl Editor {
                         continue;
                     }
 
-                    if parse_opening_fence(&anchor_dedented[0]).is_some() {
-                        if let Some((code_block, consumed)) =
+                    if parse_opening_fence(&anchor_dedented[0]).is_some()
+                        && let Some((code_block, consumed)) =
                             collect_fenced_code_block(cx, &anchor_dedented, 0)
-                        {
-                            attach_child_blocks(&block, vec![code_block], cx);
-                            body_index += consumed;
-                            pending_blank_lines = 0;
-                            saw_child = true;
-                            continue;
-                        }
+                    {
+                        attach_child_blocks(&block, vec![code_block], cx);
+                        body_index += consumed;
+                        pending_blank_lines = 0;
+                        saw_child = true;
+                        continue;
                     }
 
                     if is_root_table_candidate_line(&anchor_dedented[0]) {
@@ -1664,11 +1653,7 @@ impl Editor {
                     if starts_with_standalone_image_child_paragraph(&anchor_dedented) {
                         attach_child_blocks(
                             &block,
-                            vec![native_block(
-                                cx,
-                                BlockKind::Paragraph,
-                                anchor_dedented[0].clone(),
-                            )],
+                            vec![standalone_image_block(cx, anchor_dedented[0].clone())],
                             cx,
                         );
                         body_index += 1;
@@ -3212,6 +3197,22 @@ mod tests {
     #[gpui::test]
     async fn imports_safe_inline_html_line_as_native_html_block(cx: &mut TestAppContext) {
         let markdown = "<span style='color:blue;'>Anaconda</span>: https://example.com".to_string();
+        let editor = cx.new(|cx| Editor::from_markdown(cx, markdown.clone(), None));
+
+        editor.update(cx, |editor, cx| {
+            let visible = editor.document.visible_blocks();
+            assert_eq!(visible.len(), 1);
+            let block = visible[0].entity.read(cx);
+            assert_eq!(block.kind(), BlockKind::HtmlBlock);
+            assert_eq!(block.display_text(), markdown);
+            assert_eq!(editor.document.markdown_text(cx), markdown);
+        });
+    }
+
+    #[gpui::test]
+    async fn imports_standalone_html_image_as_native_html_block(cx: &mut TestAppContext) {
+        let markdown =
+            "<img src=\"./assets/pic.png\" alt=\"alt text\" style=\"zoom:80%;\" />".to_string();
         let editor = cx.new(|cx| Editor::from_markdown(cx, markdown.clone(), None));
 
         editor.update(cx, |editor, cx| {

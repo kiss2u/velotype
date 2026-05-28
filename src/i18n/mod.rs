@@ -4,6 +4,7 @@
 //! manager used by menus and editor UI. Visual styling remains in `theme`.
 
 use std::path::Path;
+use std::sync::Arc;
 
 use anyhow::{Context as _, bail};
 use gpui::{App, Global};
@@ -80,6 +81,8 @@ pub struct I18nStrings {
     pub menu_language: String,
     /// Top-level Theme menu label.
     pub menu_theme: String,
+    /// Top-level Workspace menu label.
+    pub menu_workspace: String,
     /// Top-level Help menu label.
     pub menu_help: String,
     /// Language menu item for importing a custom language pack.
@@ -110,6 +113,8 @@ pub struct I18nStrings {
     pub menu_check_updates: String,
     /// Help menu item for showing About information.
     pub menu_about: String,
+    /// Workspace menu item for opening or closing the workspace drawer.
+    pub menu_toggle_workspace: String,
     /// Native file-dialog prompt for opening Markdown files.
     pub open_markdown_files_prompt: String,
     /// Native file-dialog prompt for importing a language pack.
@@ -193,6 +198,21 @@ pub struct I18nStrings {
     pub preferences_shortcut_quit_application: String,
     pub preferences_shortcut_dismiss_transient_ui: String,
     pub preferences_shortcut_toggle_view_mode: String,
+    pub preferences_shortcut_toggle_workspace: String,
+    /// Workspace drawer Files tab.
+    pub workspace_tab_files: String,
+    /// Workspace drawer Outline tab.
+    pub workspace_tab_outline: String,
+    /// Title shown when no Markdown file path is available for workspace mode.
+    pub workspace_no_file_title: String,
+    /// Message shown when no Markdown file path is available for workspace mode.
+    pub workspace_no_file_message: String,
+    /// Message shown when a workspace directory has no visible Markdown files.
+    pub workspace_empty_files: String,
+    /// Message shown when the current document has no headings.
+    pub workspace_empty_outline: String,
+    /// Title shown when the workspace file tree cannot be scanned.
+    pub workspace_scan_failed_title: String,
     /// Title of the link-opening confirmation prompt.
     pub open_link_title: String,
     /// Confirm button for the link-opening prompt.
@@ -285,6 +305,7 @@ struct I18nStringsDe {
     menu_export: Option<String>,
     menu_language: Option<String>,
     menu_theme: Option<String>,
+    menu_workspace: Option<String>,
     menu_help: Option<String>,
     menu_add_language_config: Option<String>,
     menu_add_theme_config: Option<String>,
@@ -300,6 +321,7 @@ struct I18nStringsDe {
     menu_export_pdf: Option<String>,
     menu_check_updates: Option<String>,
     menu_about: Option<String>,
+    menu_toggle_workspace: Option<String>,
     open_markdown_files_prompt: Option<String>,
     add_language_config_prompt: Option<String>,
     add_theme_config_prompt: Option<String>,
@@ -363,6 +385,14 @@ struct I18nStringsDe {
     preferences_shortcut_quit_application: Option<String>,
     preferences_shortcut_dismiss_transient_ui: Option<String>,
     preferences_shortcut_toggle_view_mode: Option<String>,
+    preferences_shortcut_toggle_workspace: Option<String>,
+    workspace_tab_files: Option<String>,
+    workspace_tab_outline: Option<String>,
+    workspace_no_file_title: Option<String>,
+    workspace_no_file_message: Option<String>,
+    workspace_empty_files: Option<String>,
+    workspace_empty_outline: Option<String>,
+    workspace_scan_failed_title: Option<String>,
     open_link_title: Option<String>,
     open_link_open: Option<String>,
     open_link_cancel: Option<String>,
@@ -425,6 +455,7 @@ const I18N_STRING_KEYS: &[&str] = &[
     "menu_export",
     "menu_language",
     "menu_theme",
+    "menu_workspace",
     "menu_help",
     "menu_add_language_config",
     "menu_add_theme_config",
@@ -440,6 +471,7 @@ const I18N_STRING_KEYS: &[&str] = &[
     "menu_export_pdf",
     "menu_check_updates",
     "menu_about",
+    "menu_toggle_workspace",
     "open_markdown_files_prompt",
     "add_language_config_prompt",
     "add_theme_config_prompt",
@@ -503,6 +535,14 @@ const I18N_STRING_KEYS: &[&str] = &[
     "preferences_shortcut_quit_application",
     "preferences_shortcut_dismiss_transient_ui",
     "preferences_shortcut_toggle_view_mode",
+    "preferences_shortcut_toggle_workspace",
+    "workspace_tab_files",
+    "workspace_tab_outline",
+    "workspace_no_file_title",
+    "workspace_no_file_message",
+    "workspace_empty_files",
+    "workspace_empty_outline",
+    "workspace_scan_failed_title",
     "open_link_title",
     "open_link_open",
     "open_link_cancel",
@@ -615,6 +655,7 @@ impl I18nStringsDe {
             menu_export: self.menu_export.unwrap_or(defaults.menu_export),
             menu_language: self.menu_language.unwrap_or(defaults.menu_language),
             menu_theme: self.menu_theme.unwrap_or(defaults.menu_theme),
+            menu_workspace: self.menu_workspace.unwrap_or(defaults.menu_workspace),
             menu_help: self.menu_help.unwrap_or(defaults.menu_help),
             menu_add_language_config: self
                 .menu_add_language_config
@@ -640,6 +681,9 @@ impl I18nStringsDe {
                 .menu_check_updates
                 .unwrap_or(defaults.menu_check_updates),
             menu_about: self.menu_about.unwrap_or(defaults.menu_about),
+            menu_toggle_workspace: self
+                .menu_toggle_workspace
+                .unwrap_or(defaults.menu_toggle_workspace),
             open_markdown_files_prompt: self
                 .open_markdown_files_prompt
                 .unwrap_or(defaults.open_markdown_files_prompt),
@@ -823,6 +867,30 @@ impl I18nStringsDe {
             preferences_shortcut_toggle_view_mode: self
                 .preferences_shortcut_toggle_view_mode
                 .unwrap_or(defaults.preferences_shortcut_toggle_view_mode),
+            preferences_shortcut_toggle_workspace: self
+                .preferences_shortcut_toggle_workspace
+                .unwrap_or(defaults.preferences_shortcut_toggle_workspace),
+            workspace_tab_files: self
+                .workspace_tab_files
+                .unwrap_or(defaults.workspace_tab_files),
+            workspace_tab_outline: self
+                .workspace_tab_outline
+                .unwrap_or(defaults.workspace_tab_outline),
+            workspace_no_file_title: self
+                .workspace_no_file_title
+                .unwrap_or(defaults.workspace_no_file_title),
+            workspace_no_file_message: self
+                .workspace_no_file_message
+                .unwrap_or(defaults.workspace_no_file_message),
+            workspace_empty_files: self
+                .workspace_empty_files
+                .unwrap_or(defaults.workspace_empty_files),
+            workspace_empty_outline: self
+                .workspace_empty_outline
+                .unwrap_or(defaults.workspace_empty_outline),
+            workspace_scan_failed_title: self
+                .workspace_scan_failed_title
+                .unwrap_or(defaults.workspace_scan_failed_title),
             open_link_title: self.open_link_title.unwrap_or(defaults.open_link_title),
             open_link_open: self.open_link_open.unwrap_or(defaults.open_link_open),
             open_link_cancel: self.open_link_cancel.unwrap_or(defaults.open_link_cancel),
@@ -949,6 +1017,7 @@ impl I18nStrings {
             menu_export: "导出".into(),
             menu_language: "语言".into(),
             menu_theme: "主题".into(),
+            menu_workspace: "工作区".into(),
             menu_help: "帮助".into(),
             menu_add_language_config: "添加语言配置".into(),
             menu_add_theme_config: "添加主题配置".into(),
@@ -964,6 +1033,7 @@ impl I18nStrings {
             menu_export_pdf: "PDF".into(),
             menu_check_updates: "检查更新".into(),
             menu_about: "关于".into(),
+            menu_toggle_workspace: "切换工作区".into(),
             open_markdown_files_prompt: "打开 Markdown 文件".into(),
             add_language_config_prompt: "选择语言配置文件".into(),
             add_theme_config_prompt: "选择主题配置文件".into(),
@@ -1028,6 +1098,15 @@ impl I18nStrings {
             preferences_shortcut_quit_application: "退出应用".into(),
             preferences_shortcut_dismiss_transient_ui: "关闭临时界面".into(),
             preferences_shortcut_toggle_view_mode: "切换视图模式".into(),
+            preferences_shortcut_toggle_workspace: "切换工作区".into(),
+            workspace_tab_files: "文件".into(),
+            workspace_tab_outline: "大纲".into(),
+            workspace_no_file_title: "未打开 Markdown 文件".into(),
+            workspace_no_file_message: "打开或保存一个 .md 文件后，工作区会使用该文件所在目录。"
+                .into(),
+            workspace_empty_files: "没有可显示的 Markdown 文件".into(),
+            workspace_empty_outline: "当前文档没有标题".into(),
+            workspace_scan_failed_title: "无法读取工作区".into(),
             open_link_title: "打开链接？".into(),
             open_link_open: "打开".into(),
             open_link_cancel: "取消".into(),
@@ -1103,6 +1182,7 @@ impl I18nStrings {
             menu_export: "Export".into(),
             menu_language: "Language".into(),
             menu_theme: "Theme".into(),
+            menu_workspace: "Workspace".into(),
             menu_help: "Help".into(),
             menu_add_language_config: "Add Language Config".into(),
             menu_add_theme_config: "Add Theme Config".into(),
@@ -1118,6 +1198,7 @@ impl I18nStrings {
             menu_export_pdf: "PDF".into(),
             menu_check_updates: "Check for Updates".into(),
             menu_about: "About".into(),
+            menu_toggle_workspace: "Toggle Workspace".into(),
             open_markdown_files_prompt: "Open Markdown Files".into(),
             add_language_config_prompt: "Choose Language Config".into(),
             add_theme_config_prompt: "Choose Theme Config".into(),
@@ -1183,6 +1264,15 @@ impl I18nStrings {
             preferences_shortcut_quit_application: "Quit Application".into(),
             preferences_shortcut_dismiss_transient_ui: "Dismiss Temporary UI".into(),
             preferences_shortcut_toggle_view_mode: "Toggle View Mode".into(),
+            preferences_shortcut_toggle_workspace: "Toggle Workspace".into(),
+            workspace_tab_files: "Files".into(),
+            workspace_tab_outline: "Outline".into(),
+            workspace_no_file_title: "No Markdown File Open".into(),
+            workspace_no_file_message:
+                "Open or save a .md file to use its folder as the workspace.".into(),
+            workspace_empty_files: "No Markdown files to show".into(),
+            workspace_empty_outline: "This document has no headings".into(),
+            workspace_scan_failed_title: "Unable to Read Workspace".into(),
             open_link_title: "Open link?".into(),
             open_link_open: "Open".into(),
             open_link_cancel: "Cancel".into(),
@@ -1379,7 +1469,7 @@ fn language_id_for_locale(locale: &str) -> Option<&'static str> {
 /// Global singleton that holds the current UI language strings.
 pub struct I18nManager {
     current_language_id: String,
-    strings: I18nStrings,
+    strings: Arc<I18nStrings>,
     custom_languages: Vec<I18nLanguagePack>,
     language_catalog: Vec<LanguageCatalogEntry>,
 }
@@ -1405,10 +1495,10 @@ impl I18nManager {
     /// Installs a specific UI language into GPUI's global state.
     pub fn init_with_language_id(cx: &mut App, language_id: &str) {
         let mut manager = Self::new_with_language_id(BUILTIN_LANGUAGE_EN_US_ID);
-        if let Ok(dirs) = VelotypeConfigDirs::from_system() {
-            if let Err(err) = manager.load_custom_languages_from_dirs(&dirs) {
-                eprintln!("failed to load custom languages: {err}");
-            }
+        if let Ok(dirs) = VelotypeConfigDirs::from_system()
+            && let Err(err) = manager.load_custom_languages_from_dirs(&dirs)
+        {
+            eprintln!("failed to load custom languages: {err}");
         }
         let _ = manager.set_language_by_id(language_id);
         cx.set_global(manager);
@@ -1423,8 +1513,10 @@ impl I18nManager {
         };
         Self {
             current_language_id: current_language_id.into(),
-            strings: I18nStrings::for_language_id(current_language_id)
-                .unwrap_or_else(I18nStrings::en_us),
+            strings: Arc::new(
+                I18nStrings::for_language_id(current_language_id)
+                    .unwrap_or_else(I18nStrings::en_us),
+            ),
             custom_languages: Vec::new(),
             language_catalog: builtin_language_catalog(),
         }
@@ -1438,6 +1530,13 @@ impl I18nManager {
     /// Returns the strings for the currently active UI language.
     pub fn strings(&self) -> &I18nStrings {
         &self.strings
+    }
+
+    /// Returns an `Arc` clone of the currently active strings — O(1), no
+    /// per-field copy. Use this in hot render paths instead of cloning the
+    /// whole `I18nStrings` struct (137 `String` fields).
+    pub fn strings_arc(&self) -> Arc<I18nStrings> {
+        self.strings.clone()
     }
 
     /// Returns all built-in and imported UI languages exposed in the menu.
@@ -1460,7 +1559,7 @@ impl I18nManager {
         };
         let changed = self.current_language_id != language_id;
         self.current_language_id = language_id.into();
-        self.strings = strings;
+        self.strings = Arc::new(strings);
         changed
     }
 
